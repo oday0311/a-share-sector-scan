@@ -1,0 +1,11 @@
+config.local.json
+.cache/
+__pycache__/
+*.pyc
+.DS_Store
+._*
+.thumbnail
+uploads/
+bridge/
+com.local.sector-scan.plist
+*.log

@@ -1,0 +1,27 @@
+{
+  "llm": {
+    "base_url": "https://coding.dashscope.aliyuncs.com/v1",
+    "model": "glm5",
+    "api_key": "",
+    "temperature": 0.2,
+    "max_tokens": 2200,
+    "enable_thinking": false,
+    "timeout_seconds": 45
+  },
+  "market": {
+    "primary_source": "westock",
+    "top": 20,
+    "trend": 5,
+    "industry_candidates": 28,
+    "concept_candidates": 18,
+    "history_days": 90,
+    "http_timeout_seconds": 10,
+    "westock_hot_limit": 300,
+    "westock_candidate_limit": 300,
+    "westock_kline_limit": 45,
+    "westock_batch_size": 30,
+    "westock_kline_workers": 4,
+    "westock_timeout_seconds": 90,
+    "industry_only": true
+  }
+}
