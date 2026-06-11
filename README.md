@@ -53,7 +53,7 @@ A 股每天的市场信息非常嘈杂，概念、题材、消息和短期异动
 - Python 3.10+
 - Node.js / npx，用于调用 WeStock Data
 
-如果需要启用 AKShare 备用数据源，可安装：
+建议同时准备 AKShare 备用依赖，便于 WeStock Data 网络异常时自动兜底：
 
 ```bash
 python3 -m pip install akshare pandas requests
@@ -91,7 +91,88 @@ export LLM_API_KEY="your-api-key"
 
 `config.local.json` 已加入 `.gitignore`，不要把真实 key 写入 README、前端文件或提交记录。
 
-### 3. 启动本地服务
+### 3. 配置数据源
+
+默认配置已经写在 `config.local.example.json` 中，本地可按需覆盖到 `config.local.json`：
+
+```json
+{
+  "market": {
+    "primary_source": "westock",
+    "top": 20,
+    "trend": 5,
+    "history_days": 90,
+    "http_timeout_seconds": 10,
+    "westock_hot_limit": 300,
+    "westock_candidate_limit": 300,
+    "westock_kline_limit": 45,
+    "westock_batch_size": 30,
+    "westock_kline_workers": 4,
+    "westock_timeout_seconds": 90,
+    "industry_only": true
+  }
+}
+```
+
+#### WeStock Data 主数据源
+
+WeStock Data 是默认主数据源，不需要单独配置行情 key。服务会通过下面的固定命令形式调用腾讯自选股行情数据：
+
+```bash
+npx -y westock-data-clawhub@1.0.4 board
+npx -y westock-data-clawhub@1.0.4 hot board --limit 10
+npx -y westock-data-clawhub@1.0.4 kline sh000001 --period day --limit 5
+```
+
+对接要求：
+
+- 本机已安装 Node.js 和 `npx`。
+- 首次运行会从 npm 下载 `westock-data-clawhub@1.0.4`，需要能访问 npm registry。
+- 运行时需要能访问腾讯自选股行情接口。
+- 敏感或生产环境建议固定包版本、使用可信 npm 镜像或提前完成安全审查。
+
+可用性验证：
+
+```bash
+node -v
+npx --version
+npx -y westock-data-clawhub@1.0.4 board
+```
+
+如果 `npx` 下载慢或失败，可以先检查本机网络、npm registry、代理设置，再重新启动服务。
+
+#### AKShare 备用数据源
+
+AKShare 作为备用源使用，主要在 WeStock Data 失败时自动回退。它不需要行情 key，但需要安装 Python 依赖并能访问东方财富相关接口：
+
+```bash
+python3 -m pip install akshare pandas requests
+```
+
+可用性验证：
+
+```bash
+python3 - <<'PY'
+import akshare as ak
+df = ak.stock_board_industry_name_em()
+print(len(df))
+print(df.head(1).to_dict("records"))
+PY
+```
+
+如果希望直接以 AKShare 作为主数据源，可以在 `config.local.json` 中调整：
+
+```json
+{
+  "market": {
+    "primary_source": "akshare"
+  }
+}
+```
+
+实际扫描结果会在页面底部和接口 `meta.dataProvider` 中标明当前使用的数据源，例如 `westock` 或 `akshare`。
+
+### 4. 启动本地服务
 
 ```bash
 python3 server.py --host 127.0.0.1 --port 8765
@@ -162,12 +243,15 @@ GET /api/scan?date=2026-06-11&refresh=1
 ### Agent 执行清单
 
 1. 确认当前目录包含 `server.py`、`A股板块分析终端.html`、`app.js`、`terminal.css` 和 `config.local.example.json`。
-2. 检查本机是否有 Python 3.10+ 和 Node.js / npx。
+2. 检查本机是否有 Python 3.10+、Node.js 和 `npx`。
 3. 复制 `config.local.example.json` 为 `config.local.json`，或用环境变量注入 `LLM_API_KEY`。
-4. 启动服务：`python3 server.py --host 127.0.0.1 --port 8765`。
-5. 打开 `http://127.0.0.1:8765/`，选择日期并执行扫描。
-6. 验证 `http://127.0.0.1:8765/api/scan` 能返回 JSON，且 `sectors` 数量为 20 左右、`meta.aiStatus` 有明确状态。
-7. 提交或分发前执行敏感信息检查，确认 `config.local.json`、`.cache/`、本地 plist 和真实 key 没有进入 Git。
+4. 验证 WeStock Data：`npx -y westock-data-clawhub@1.0.4 board`。
+5. 安装 AKShare 备用源：`python3 -m pip install akshare pandas requests`。
+6. 验证 AKShare：`python3 -c "import akshare as ak; print(len(ak.stock_board_industry_name_em()))"`。
+7. 启动服务：`python3 server.py --host 127.0.0.1 --port 8765`。
+8. 打开 `http://127.0.0.1:8765/`，选择日期并执行扫描。
+9. 验证 `http://127.0.0.1:8765/api/scan` 能返回 JSON，且 `sectors` 数量为 20 左右、`meta.dataProvider` 和 `meta.aiStatus` 有明确状态。
+10. 提交或分发前执行敏感信息检查，确认 `config.local.json`、`.cache/`、本地 plist 和真实 key 没有进入 Git。
 
 ### 适合部署的环境
 
@@ -212,6 +296,7 @@ python3 server.py --host 0.0.0.0 --port 8765
 
 - 优先数据源：WeStock Data / 腾讯自选股。
 - 备用数据源：AKShare / 东方财富。
+- 数据源选择：`market.primary_source` 默认为 `westock`；设置为 `akshare` 可直接使用 AKShare。
 - 普通扫描会优先读取 `.cache/scan_request_YYYY-MM-DD.json`。
 - 重新扫描会覆盖同一日期缓存，只保留最新版本。
 - 当实时数据源异常时，系统会尝试读取最近缓存；若缓存也不可用，则回退到 `data.js` 中的静态快照，避免页面空白。
@@ -264,6 +349,16 @@ python3 server.py --host 127.0.0.1 --port 8765
 ### 数据源失败
 
 WeStock Data 需要本机可以运行 `npx` 并访问对应行情接口。若 WeStock 不可用，系统会尝试 AKShare；若两个数据源都不可用，会读取本地缓存或静态快照。
+
+建议按顺序排查：
+
+```bash
+npx -y westock-data-clawhub@1.0.4 board
+python3 -c "import akshare as ak; print(len(ak.stock_board_industry_name_em()))"
+curl -sS "http://127.0.0.1:8765/api/scan?date=2026-06-11" | python3 -m json.tool
+```
+
+如果只想临时绕过 WeStock Data，可把 `config.local.json` 中的 `market.primary_source` 改为 `akshare` 后重启服务。
 
 ## 项目结构
 
