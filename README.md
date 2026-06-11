@@ -44,6 +44,33 @@ A 股每天的市场信息非常嘈杂，概念、题材、消息和短期异动
 - AI 接口：OpenAI-compatible Chat Completions 风格调用，配置只在后端读取，不暴露到浏览器。
 - 本地缓存：`.cache/scan_request_YYYY-MM-DD.json`，默认不提交到 Git。
 
+## 代码标准与许可
+
+本项目采用“源码可见、非商业使用”的开放方式，许可声明结构参考了 [Dify License](https://github.com/langgenius/dify/blob/main/LICENSE) 中“基于 Apache 2.0 并增加额外条件”的做法，但本项目限制更明确：不支持二次商用。详细条款见 [LICENSE](LICENSE)。
+
+允许：
+
+- 个人学习、研究、复盘和本地非商业使用。
+- 在非商业场景下 fork、修改、部署和二次开发。
+- 用于编程智能体、量化学习、行情复盘工具链的本地实验。
+
+不允许，除非获得书面授权：
+
+- 将本项目或其衍生版本打包销售、转售、出租或授权给第三方。
+- 将本项目作为付费 SaaS、托管服务、API 服务、订阅产品或商业终端提供。
+- 将本项目改名、换标、白标后作为商业软件交付。
+- 基于本项目提供付费部署、付费集成、付费定制或付费咨询交付。
+- 移除项目中的许可说明、风险提示、来源说明或非商业限制。
+
+代码贡献和二次开发需遵循：
+
+- 保持轻量化：优先使用标准库和现有结构，避免引入不必要的框架。
+- 保持安全边界：AI key 只允许存在于 `config.local.json` 或环境变量中，不得进入前端、日志、缓存样例或 Git 历史。
+- 保持 AI 边界：AI 只做复盘总结、信号解释和噪音过滤，不输出买卖指令或投资承诺。
+- 保持可验证：行情排序、涨跌幅、资金、趋势、技术指标等计算逻辑应由后端规则生成，AI 文案不能覆盖原始指标。
+- 保持可回退：数据源调用必须有缓存或静态快照兜底，避免页面空白。
+- 提交前运行基础检查：`python3 -m py_compile server.py`、`node --check app.js`，并执行敏感信息扫描。
+
 ## 快速开始
 
 ### 1. 准备环境
@@ -371,6 +398,7 @@ curl -sS "http://127.0.0.1:8765/api/scan?date=2026-06-11" | python3 -m json.tool
 ├── data.js                 # 静态兜底快照
 ├── config.local.example.json
 ├── start_server.command    # macOS 一键启动脚本
+├── LICENSE                 # 源码可见、非商业使用许可
 ├── docs/
 │   └── screenshot.jpg      # GitHub README 截图
 └── .gitignore

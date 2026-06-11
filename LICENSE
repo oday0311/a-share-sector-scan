@@ -1,0 +1,62 @@
+A-Share Sector Scan Source-Available Non-Commercial License
+
+Copyright (c) 2026
+
+This project is source-available for learning, research, personal use, and
+non-commercial internal evaluation, subject to the conditions below.
+
+1. Permitted use
+
+You may view, run, copy, modify, and deploy this project for personal research,
+study, local market review, and non-commercial internal evaluation.
+
+2. Commercial restriction
+
+Commercial use is not permitted without prior written authorization from the
+copyright holder. Prohibited commercial use includes, but is not limited to:
+
+- selling, sublicensing, or leasing this project or derivative works;
+- providing this project as a paid SaaS, hosted service, API service, or
+  subscription product;
+- using this project as the core functionality of a paid product or service;
+- white-labeling, rebranding, repackaging, or redistributing this project for
+  commercial delivery;
+- providing paid deployment, paid integration, paid customization, or paid
+  consulting services where this project is the delivered software asset.
+
+3. Redistribution and derivative works
+
+Redistribution and derivative works are allowed only for non-commercial
+purposes, and must preserve:
+
+- this license file;
+- copyright and attribution notices;
+- the non-commercial restriction;
+- the investment-risk disclaimer in the project documentation.
+
+4. No investment advice
+
+This project is provided for market review, research, and technical
+demonstration only. AI-generated content and market signals must not be treated
+as investment advice, trading instructions, or a substitute for independent
+judgment.
+
+5. Third-party services and data
+
+This project may connect to third-party model providers and market data sources.
+Users are responsible for complying with the terms, licenses, and usage limits
+of those third-party services, including but not limited to model APIs, WeStock
+Data, AKShare, npm packages, and market data providers.
+
+6. No warranty
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
+FOR A PARTICULAR PURPOSE, AND NON-INFRINGEMENT. IN NO EVENT SHALL THE COPYRIGHT
+HOLDER BE LIABLE FOR ANY CLAIM, DAMAGES, OR OTHER LIABILITY ARISING FROM THE
+USE OF THIS SOFTWARE.
+
+7. Separate commercial license
+
+Any commercial use, enterprise redistribution, hosted service, white-label
+deployment, or paid secondary development requires separate written permission.
