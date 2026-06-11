@@ -1,12 +1,29 @@
 # A股行业板块扫描终端
 
-一个本地运行的 AI 驱动 A 股标准行业板块复盘与扫描系统。系统优先使用 WeStock Data / 腾讯自选股获取行情，AKShare 作为备用数据源；后端按全量行业板块行情计算排序、趋势、资金和技术指标，AI 只负责辅助筛选解释、市场信号和策略文案生成。
+一个面向个人投资者的本地 A 股行业板块 AI 分析终端，用于复盘和动态感知标准行业板块的趋势变化。系统优先使用 WeStock Data / 腾讯自选股获取行情，AKShare 作为备用数据源；后端负责全量行业板块扫描、排序、趋势、资金和技术指标计算，AI 负责过滤市场噪音、提炼复盘结论和辅助生成分析摘要。
 
 > 本项目仅用于本地研究和复盘，不构成投资建议。
 
+## 项目亮点
+
+- 超轻量实现：前端使用原生 HTML / CSS / JavaScript，后端仅使用 Python 标准库 HTTP 服务，核心逻辑集中，便于编程智能体阅读、修改和部署。
+- OpenAI 风格模型接入：支持灵活配置 `base_url`、`model`、`api_key`、`temperature` 和超时时间，可对接 DashScope、私有网关或其他兼容 Chat Completions 的模型服务。
+- AI 边界清晰：AI 只做行情复盘、摘要生成、市场信号解释和方向归纳，不直接给出买卖建议，不替代投资决策。
+- 类 Bloomberg 终端风格：高密度信息、深色终端、热力图、板块矩阵、资金流和信号面板，适合快速扫描市场结构变化。
+- 行业板块优先：只聚焦标准行业板块，过滤概念、主题、昨日涨停等噪音标签，让分析对象更稳定。
+- 日期可复盘：支持选择历史日期扫描，运行过的日期会保存本地结果，下次切换日期可直接读取。
+- 数据源有兜底：WeStock Data 优先，AKShare 备选；数据源异常时可读取本地缓存或静态快照，避免页面空白。
+- 适合二次开发：接口返回结构稳定，前后端耦合轻，适合用 Claude Code、Codex 等编程智能体快速扩展。
+
+## 设计初衷
+
+A 股每天的市场信息非常嘈杂，概念、题材、消息和短期异动容易掩盖真正的行业趋势。本项目希望提供一个轻量、可本地运行、可复盘的板块分析工具：先用规则和全量行情数据把标准行业板块排序、趋势和资金变化计算清楚，再让 AI 对结果进行压缩、归纳和解释，帮助个人投资者更快感知板块强弱切换、持续性变化和潜在风险，形成更清晰的复盘与分析决策依据。
+
+项目的目标不是预测涨跌，也不是输出交易指令，而是把分散的行情数据整理成一个可读、可追溯、可重复扫描的板块趋势观察面板。
+
 ## 系统界面
 
-![A股板块扫描系统界面](docs/screenshot.png)
+![A股板块扫描系统界面](docs/screenshot.jpg)
 
 ## 核心功能
 
@@ -138,7 +155,27 @@ GET /api/scan?date=2026-06-11&refresh=1
 - `disabled`：未配置 AI key。
 - `error`：AI 调用失败。
 
-## 部署说明
+## 面向编程智能体的部署指引
+
+本项目刻意保持文件少、依赖少、启动路径短，适合交给 Claude Code、Codex 这类编程智能体按指引快速部署和排障。
+
+### Agent 执行清单
+
+1. 确认当前目录包含 `server.py`、`A股板块分析终端.html`、`app.js`、`terminal.css` 和 `config.local.example.json`。
+2. 检查本机是否有 Python 3.10+ 和 Node.js / npx。
+3. 复制 `config.local.example.json` 为 `config.local.json`，或用环境变量注入 `LLM_API_KEY`。
+4. 启动服务：`python3 server.py --host 127.0.0.1 --port 8765`。
+5. 打开 `http://127.0.0.1:8765/`，选择日期并执行扫描。
+6. 验证 `http://127.0.0.1:8765/api/scan` 能返回 JSON，且 `sectors` 数量为 20 左右、`meta.aiStatus` 有明确状态。
+7. 提交或分发前执行敏感信息检查，确认 `config.local.json`、`.cache/`、本地 plist 和真实 key 没有进入 Git。
+
+### 适合部署的环境
+
+- 个人 Mac / Windows / Linux 电脑：最推荐，适合本地复盘和日常使用。
+- 本地开发机或 NAS：适合在内网长期运行，通过浏览器访问。
+- 内网服务器或小型 VPS：适合多设备访问，但建议加访问控制，并使用环境变量管理 key。
+- GitHub Codespaces / Dev Container：适合演示、改造和临时开发，但行情接口和 `npx` 网络访问可能受环境限制。
+- 不推荐纯 GitHub Pages：只能托管静态页面，无法运行 `/api/scan` 后端接口，也无法安全保存 AI key。
 
 ### 本机部署（推荐）
 
@@ -240,7 +277,7 @@ WeStock Data 需要本机可以运行 `npx` 并访问对应行情接口。若 We
 ├── config.local.example.json
 ├── start_server.command    # macOS 一键启动脚本
 ├── docs/
-│   └── screenshot.png      # GitHub README 截图
+│   └── screenshot.jpg      # GitHub README 截图
 └── .gitignore
 ```
 
