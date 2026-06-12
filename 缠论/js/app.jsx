@@ -3,8 +3,7 @@ const { useState, useEffect, useRef } = React;
 const CLD = window.CL_DATA;
 
 const PERIODS = [
-  { id: 'day', label: '日线' },
-  { id: 'week', label: '周线' }
+  { id: 'day', label: '日线' }
 ];
 const LAST_QUERY_KEY = 'chanlun:last-query:v1';
 
@@ -50,6 +49,13 @@ function writeLastQuery(stock, period, date) {
   }
 }
 
+function searchGroupName(s) {
+  if (s && s.group) return s.group;
+  if (s && s.market === '指数') return '指数';
+  if (s && s.market === '港股') return '港股热门';
+  return '热门股票';
+}
+
 function SearchBox({ selected, onPick }) {
   const [q, setQ] = useState(stockDisplayCode(selected));
   const [open, setOpen] = useState(false);
@@ -75,7 +81,7 @@ function SearchBox({ selected, onPick }) {
       return () => { alive = false; };
     }
     const query = q.trim();
-    if (!query) {
+    if (!query || query === stockDisplayCode(selected)) {
       setList(CLD.defaultStocks(mk));
       return;
     }
@@ -87,7 +93,7 @@ function SearchBox({ selected, onPick }) {
         .finally(() => { if (alive) setLoading(false); });
     }, 180);
     return () => { alive = false; clearTimeout(timer); };
-  }, [q, mk, open]);
+  }, [q, mk, open, selected && selected.code, selected && selected.symbol]);
 
   const pick = (s) => {
     onPick(s);
@@ -120,13 +126,20 @@ function SearchBox({ selected, onPick }) {
           </div>
           {loading && <div className="search-empty">搜索中...</div>}
           {!loading && list.length === 0 && <div className="search-empty">未找到匹配标的(第一版暂不支持北交所)</div>}
-          {!loading && list.map((s) => (
-            <button key={s.symbol || s.code} type="button" className="sr-row" onClick={() => pick(s)}>
-              <span className="sr-code">{s.code}</span>
-              <span className="sr-name">{s.name}</span>
-              <span className={'mtag m-' + (s.market === 'A股' ? 'a' : s.market === '港股' ? 'h' : 'i')}>{s.market}</span>
-            </button>
-          ))}
+          {!loading && list.map((s, idx) => {
+            const group = searchGroupName(s);
+            const prevGroup = idx > 0 ? searchGroupName(list[idx - 1]) : '';
+            return (
+              <React.Fragment key={s.symbol || s.code}>
+                {group !== prevGroup && <div className="search-group-title">{group}</div>}
+                <button type="button" className="sr-row" onClick={() => pick(s)}>
+                  <span className="sr-code">{s.code}</span>
+                  <span className="sr-name">{s.name}</span>
+                  <span className={'mtag m-' + (s.market === 'A股' ? 'a' : s.market === '港股' ? 'h' : 'i')}>{s.market}</span>
+                </button>
+              </React.Fragment>
+            );
+          })}
         </div>
       )}
     </div>
