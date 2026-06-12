@@ -16,6 +16,7 @@
   const arrow = (v) => (v > 0.05 ? '▲' : v < -0.05 ? '▼' : '◆');
   const lerp = (a, b, t) => a + (b - a) * t;
   const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
+  const cssVar = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
 
   let RANGE = 't'; // 't' | 'd5' | 'd20'
   let SORT = { key: 'today', dir: -1 };
@@ -336,15 +337,15 @@
         plugins: {
           legend: { display: false },
           tooltip: {
-            backgroundColor: '#0e1726', borderColor: '#24344d', borderWidth: 1, padding: 10,
-            titleColor: '#fff', bodyColor: '#d4e2f7', titleFont: { family: 'IBM Plex Mono' },
+            backgroundColor: 'rgba(32,36,44,0.95)', borderColor: 'rgba(228,223,210,0.18)', borderWidth: 1, padding: 10,
+            titleColor: '#fffdf8', bodyColor: '#efece2', titleFont: { family: 'IBM Plex Mono' },
             bodyFont: { family: 'IBM Plex Mono', size: 11 }, boxPadding: 4,
             callbacks: { label: c => ` ${c.dataset.label}  ${c.parsed.y.toFixed(1)}` },
           },
         },
         scales: {
-          x: { grid: { color: '#eef2f8' }, ticks: { color: '#8694b0', font: { family: 'IBM Plex Mono', size: 9 }, maxRotation: 0, autoSkipPadding: 14 } },
-          y: { grid: { color: '#eef2f8' }, ticks: { color: '#8694b0', font: { family: 'IBM Plex Mono', size: 9 }, callback: v => v.toFixed(0) } },
+          x: { grid: { color: cssVar('--hair') || '#e4dfd2' }, ticks: { color: cssVar('--ink2') || '#6b6f78', font: { family: 'IBM Plex Mono', size: 9 }, maxRotation: 0, autoSkipPadding: 14 } },
+          y: { grid: { color: cssVar('--hair') || '#e4dfd2' }, ticks: { color: cssVar('--ink2') || '#6b6f78', font: { family: 'IBM Plex Mono', size: 9 }, callback: v => v.toFixed(0) } },
         },
       },
     });
@@ -405,7 +406,7 @@
         data: { labels: D.trend.dates, datasets: [{ data: normalize(kline), borderColor: col, borderWidth: 2, pointRadius: 0, tension: 0.3, fill: true, backgroundColor: up ? 'rgba(225,50,47,0.08)' : 'rgba(0,143,93,0.08)' }] },
         options: {
           responsive: true, maintainAspectRatio: false, animation: false, plugins: { legend: { display: false }, tooltip: { enabled: false } },
-          scales: { x: { display: false }, y: { grid: { color: '#eef2f8' }, ticks: { color: '#8694b0', font: { family: 'IBM Plex Mono', size: 9 }, maxTicksLimit: 4 } } },
+          scales: { x: { display: false }, y: { grid: { color: cssVar('--hair') || '#e4dfd2' }, ticks: { color: cssVar('--ink2') || '#6b6f78', font: { family: 'IBM Plex Mono', size: 9 }, maxTicksLimit: 4 } } },
         },
       });
     } else {
