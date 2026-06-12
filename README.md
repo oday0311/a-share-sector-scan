@@ -1,6 +1,6 @@
-# A股行业板块扫描终端
+# A股行业板块扫描与缠论分析终端
 
-一个面向个人投资者的本地 A 股行业板块 AI 分析终端，用于复盘和动态感知标准行业板块的趋势变化。系统优先使用 WeStock Data / 腾讯自选股获取行情，AKShare 作为备用数据源；后端负责全量行业板块扫描、排序、趋势、资金和技术指标计算，AI 负责过滤市场噪音、提炼复盘结论和辅助生成分析摘要。
+一个面向个人投资者的本地 A 股行业板块 AI 分析终端，用于复盘和动态感知标准行业板块的趋势变化，并提供 A 股、港股、指数的缠论结构复盘页签。系统优先使用 WeStock Data / 腾讯自选股获取行情，AKShare 作为备用数据源；后端负责全量行业板块扫描、排序、趋势、资金、技术指标和缠论结构识别，AI 负责过滤市场噪音、提炼复盘结论和辅助生成分析摘要。
 
 > 本项目仅用于本地研究和复盘，不构成投资建议。
 
@@ -10,7 +10,9 @@
 - OpenAI 风格模型接入：支持灵活配置 `base_url`、`model`、`api_key`、`temperature` 和超时时间，可对接 DashScope、私有网关或其他兼容 Chat Completions 的模型服务。
 - AI 边界清晰：AI 只做行情复盘、摘要生成、市场信号解释和方向归纳，不直接给出买卖建议，不替代投资决策。
 - 类 Bloomberg 终端风格：高密度信息、深色终端、热力图、板块矩阵、资金流和信号面板，适合快速扫描市场结构变化。
+- 双页签工作台：`板块扫描` 用于全市场行业强弱复盘，`缠论分析` 用于单标的 K 线结构拆解。
 - 行业板块优先：只聚焦标准行业板块，过滤概念、主题、昨日涨停等噪音标签，让分析对象更稳定。
+- 缠论结构识别：后端规则计算包含处理、分型、笔、线段、中枢、MACD、背驰和三类买卖点，AI 只解释结构事实。
 - 日期可复盘：支持选择历史日期扫描，运行过的日期会保存本地结果，下次切换日期可直接读取。
 - 数据源有兜底：WeStock Data 优先，AKShare 备选；数据源异常时可读取本地缓存或静态快照，避免页面空白。
 - 适合二次开发：接口返回结构稳定，前后端耦合轻，适合用 Claude Code、Codex 等编程智能体快速扩展。
@@ -35,6 +37,9 @@ A 股每天的市场信息非常嘈杂，概念、题材、消息和短期异动
 - 指数区覆盖上证指数、沪深 300、创业板指、科创综指、科创 50、深证成指。
 - AI 动态筛选板块与个股，并生成 `TOP PICKS`、`MARKET SIGNALS`、`STRATEGY SUMMARY`；AI 失败时自动使用规则分析兜底。
 - 每个日期的扫描结果保存到本地缓存，重复查看直接读取缓存；点击“重新扫描”会覆盖该日期的最新结果。
+- 缠论分析支持 A 股、港股、指数搜索，周期支持日线和周线。
+- 缠论后端输出真实 K 线、分型、笔、线段、中枢、MACD、背驰、买卖点、趋势判断和复盘摘要。
+- 缠论结果按 `symbol + period + date` 缓存到本地，点击“重新分析”会覆盖同一缓存。
 
 ## 技术架构
 
@@ -43,6 +48,7 @@ A 股每天的市场信息非常嘈杂，概念、题材、消息和短期异动
 - 数据源优先级：WeStock Data / 腾讯自选股优先，AKShare 备选。
 - AI 接口：OpenAI-compatible Chat Completions 风格调用，配置只在后端读取，不暴露到浏览器。
 - 本地缓存：`.cache/scan_request_YYYY-MM-DD.json`，默认不提交到 Git。
+- 缠论缓存：`.cache/chanlun_{symbol}_{period}_{date}.json`，默认不提交到 Git。
 
 ## 代码标准与许可
 
@@ -137,6 +143,11 @@ export LLM_API_KEY="your-api-key"
     "westock_kline_workers": 4,
     "westock_timeout_seconds": 90,
     "industry_only": true
+  },
+  "chanlun": {
+    "bars": 220,
+    "westock_kline_limit": 260,
+    "min_stroke_gap": 4
   }
 }
 ```
@@ -211,6 +222,12 @@ python3 server.py --host 127.0.0.1 --port 8765
 http://127.0.0.1:8765/
 ```
 
+缠论分析页签也可以直接访问：
+
+```text
+http://127.0.0.1:8765/chanlun
+```
+
 macOS 也可以直接双击：
 
 ```text
@@ -224,6 +241,8 @@ start_server.command
 3. 点击“重新扫描”，系统会重新拉取行情、重新分析，并覆盖保存该日期的缓存结果。
 4. 页面会展示实际分析日。如果选择的是周末、节假日或未来日期，系统会回退到不晚于所选日期的最近可用交易日。
 5. 当 AI 不可用、超时或返回格式异常时，页面仍会使用规则分析结果正常展示。
+6. 切换到“缠论分析”页签后，可搜索 A 股、港股或指数，选择日线/周线并按日期复盘结构。
+7. 缠论页点击“重新分析”会重新拉取 K 线、重新计算结构、重新生成摘要，并覆盖同一标的、周期、日期的缓存。
 
 ## 接口说明
 
@@ -263,6 +282,50 @@ GET /api/scan?date=2026-06-11&refresh=1
 - `disabled`：未配置 AI key。
 - `error`：AI 调用失败。
 
+### `GET /api/chanlun/search`
+
+请求示例：
+
+```text
+GET /api/chanlun/search?q=腾讯&market=all
+GET /api/chanlun/search?q=600519&market=a
+```
+
+参数：
+
+- `q`：搜索关键字，支持名称、A 股代码、港股代码和指数代码。
+- `market`：可选，`all`、`a`、`hk`、`index`，缺省为 `all`。
+
+返回字段：
+
+- `items`：候选标的列表，包含 `code`、`symbol`、`name`、`market`、`unit`。
+- `meta`：查询关键字、市场过滤条件和结果数量。
+
+### `GET /api/chanlun/analyze`
+
+请求示例：
+
+```text
+GET /api/chanlun/analyze?symbol=600519&period=day
+GET /api/chanlun/analyze?symbol=hk00700&period=week&date=2026-06-12&refresh=1
+```
+
+参数：
+
+- `symbol`：必填，支持 `600519`、`sh600519`、`hk00700`、`sh000001` 等形式。
+- `period`：可选，`day` 或 `week`，缺省为 `day`；第一版不实现分钟级周期。
+- `date`：可选，格式为 `YYYY-MM-DD`；非交易日或未来日期会回退到最近可用 K 线。
+- `refresh`：可选，传 `1` 时强制重新分析并覆盖同一缓存。
+
+返回字段：
+
+- `meta`：请求日期、实际 K 线日期、周期、数据源、缓存状态、AI 状态。
+- `stock`：标的代码、名称、市场、价格单位。
+- `bars`：真实 K 线数据。
+- `analysis`：`fractals / pts / segs / pivots / macd / divergence / signals / trend / stats`。
+- `verdict`：规则版核心结论、分项卡片、风险提示和解释依据。
+- `ai`：AI 复盘文案，AI 不可用时为空对象或规则兜底内容。
+
 ## 面向编程智能体的部署指引
 
 本项目刻意保持文件少、依赖少、启动路径短，适合交给 Claude Code、Codex 这类编程智能体按指引快速部署和排障。
@@ -277,8 +340,10 @@ GET /api/scan?date=2026-06-11&refresh=1
 6. 验证 AKShare：`python3 -c "import akshare as ak; print(len(ak.stock_board_industry_name_em()))"`。
 7. 启动服务：`python3 server.py --host 127.0.0.1 --port 8765`。
 8. 打开 `http://127.0.0.1:8765/`，选择日期并执行扫描。
-9. 验证 `http://127.0.0.1:8765/api/scan` 能返回 JSON，且 `sectors` 数量为 20 左右、`meta.dataProvider` 和 `meta.aiStatus` 有明确状态。
-10. 提交或分发前执行敏感信息检查，确认 `config.local.json`、`.cache/`、本地 plist 和真实 key 没有进入 Git。
+9. 打开 `http://127.0.0.1:8765/chanlun`，搜索 `腾讯` 或 `600519`，确认日线/周线能返回真实 K 线和结构分析。
+10. 验证 `http://127.0.0.1:8765/api/scan` 能返回 JSON，且 `sectors` 数量为 20 左右、`meta.dataProvider` 和 `meta.aiStatus` 有明确状态。
+11. 验证 `http://127.0.0.1:8765/api/chanlun/analyze?symbol=600519&period=day` 能返回 JSON，且 `bars`、`analysis.fractals`、`analysis.pts` 不为空。
+12. 提交或分发前执行敏感信息检查，确认 `config.local.json`、`.cache/`、本地 plist 和真实 key 没有进入 Git。
 
 ### 适合部署的环境
 
@@ -326,6 +391,8 @@ python3 server.py --host 0.0.0.0 --port 8765
 - 数据源选择：`market.primary_source` 默认为 `westock`；设置为 `akshare` 可直接使用 AKShare。
 - 普通扫描会优先读取 `.cache/scan_request_YYYY-MM-DD.json`。
 - 重新扫描会覆盖同一日期缓存，只保留最新版本。
+- 缠论分析会优先读取 `.cache/chanlun_{symbol}_{period}_{date}.json`。
+- 缠论页面点击“重新分析”会覆盖同一标的、周期和日期的缓存，只保留最新版本。
 - 当实时数据源异常时，系统会尝试读取最近缓存；若缓存也不可用，则回退到 `data.js` 中的静态快照，避免页面空白。
 
 ## 敏感信息与脱敏
@@ -344,7 +411,7 @@ python3 server.py --host 0.0.0.0 --port 8765
 
 ```bash
 git status --short --ignored
-rg -n "sk-[A-Za-z0-9_-]+|api_key.*sk-|LLM_API_KEY=.*[A-Za-z0-9]" --hidden --glob '!config.local.json' --glob '!.cache/**' --glob '!.git/**' .
+rg -n "\bsk-[A-Za-z0-9_-]{16,}|api_key\s*[:=]\s*['\"]?sk-[A-Za-z0-9_-]{16,}|LLM_API_KEY\s*=\s*sk-[A-Za-z0-9_-]{16,}" --hidden --glob '!config.local.json' --glob '!.cache/**' --glob '!.git/**' --glob '!**/._*' .
 ```
 
 真实 API key 只应存在于本机 `config.local.json` 或环境变量中，不应出现在前端源码、README、截图、接口响应或 Git 提交历史里。
@@ -383,6 +450,7 @@ WeStock Data 需要本机可以运行 `npx` 并访问对应行情接口。若 We
 npx -y westock-data-clawhub@1.0.4 board
 python3 -c "import akshare as ak; print(len(ak.stock_board_industry_name_em()))"
 curl -sS "http://127.0.0.1:8765/api/scan?date=2026-06-11" | python3 -m json.tool
+curl -sS "http://127.0.0.1:8765/api/chanlun/analyze?symbol=600519&period=day" | python3 -m json.tool
 ```
 
 如果只想临时绕过 WeStock Data，可把 `config.local.json` 中的 `market.primary_source` 改为 `akshare` 后重启服务。
@@ -401,6 +469,14 @@ curl -sS "http://127.0.0.1:8765/api/scan?date=2026-06-11" | python3 -m json.tool
 ├── LICENSE                 # 源码可见、非商业使用许可
 ├── docs/
 │   └── screenshot.jpg      # GitHub README 截图
+├── 缠论/
+│   ├── index.html          # 缠论分析页入口
+│   ├── styles.css          # 缠论页样式
+│   └── js/
+│       ├── data.js         # 缠论 API 客户端
+│       ├── app.jsx         # 缠论页面状态与交互
+│       ├── chart.jsx       # K 线与结构图表
+│       └── sections.jsx    # 结构解读与买卖点面板
 └── .gitignore
 ```
 

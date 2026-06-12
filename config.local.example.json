@@ -23,5 +23,10 @@
     "westock_kline_workers": 4,
     "westock_timeout_seconds": 90,
     "industry_only": true
+  },
+  "chanlun": {
+    "bars": 220,
+    "westock_kline_limit": 260,
+    "min_stroke_gap": 4
   }
 }

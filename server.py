@@ -53,6 +53,11 @@ DEFAULT_CONFIG = {
         "westock_timeout_seconds": 90,
         "industry_only": True,
     },
+    "chanlun": {
+        "bars": 220,
+        "westock_kline_limit": 260,
+        "min_stroke_gap": 4,
+    },
 }
 
 INDEX_SYMBOLS = [
@@ -62,6 +67,24 @@ INDEX_SYMBOLS = [
     ("科创综指", "STAR", "sh000680"),
     ("科创50", "STAR50", "sh000688"),
     ("深证成指", "SZSE", "sz399001"),
+]
+
+CHANLUN_DEFAULT_STOCKS = [
+    {"code": "600519", "symbol": "sh600519", "name": "贵州茅台", "market": "A股", "unit": "¥"},
+    {"code": "300750", "symbol": "sz300750", "name": "宁德时代", "market": "A股", "unit": "¥"},
+    {"code": "601318", "symbol": "sh601318", "name": "中国平安", "market": "A股", "unit": "¥"},
+    {"code": "600036", "symbol": "sh600036", "name": "招商银行", "market": "A股", "unit": "¥"},
+    {"code": "002594", "symbol": "sz002594", "name": "比亚迪", "market": "A股", "unit": "¥"},
+    {"code": "688981", "symbol": "sh688981", "name": "中芯国际", "market": "A股", "unit": "¥"},
+    {"code": "00700", "symbol": "hk00700", "name": "腾讯控股", "market": "港股", "unit": "HK$"},
+    {"code": "09988", "symbol": "hk09988", "name": "阿里巴巴", "market": "港股", "unit": "HK$"},
+    {"code": "03690", "symbol": "hk03690", "name": "美团", "market": "港股", "unit": "HK$"},
+    {"code": "01810", "symbol": "hk01810", "name": "小米集团", "market": "港股", "unit": "HK$"},
+    {"code": "000001.SH", "symbol": "sh000001", "name": "上证指数", "market": "指数", "unit": "点"},
+    {"code": "399001.SZ", "symbol": "sz399001", "name": "深证成指", "market": "指数", "unit": "点"},
+    {"code": "399006.SZ", "symbol": "sz399006", "name": "创业板指", "market": "指数", "unit": "点"},
+    {"code": "000300.SH", "symbol": "sh000300", "name": "沪深300", "market": "指数", "unit": "点"},
+    {"code": "000688.SH", "symbol": "sh000688", "name": "科创50", "market": "指数", "unit": "点"},
 ]
 
 HOT_KW = ("机器人", "AI", "算力", "芯片", "光模块", "半导体", "6G", "低空", "航天", "军工")
@@ -1674,6 +1697,46 @@ def extract_json(text: str) -> dict:
     return json.loads(text)
 
 
+class LLMDisabled(RuntimeError):
+    pass
+
+
+def call_llm_json(cfg: dict, system_prompt: str, payload_data: dict, max_tokens: int | None = None) -> tuple[dict, str]:
+    llm = cfg.get("llm", {})
+    api_key = str(llm.get("api_key") or "").strip()
+    if not api_key:
+        raise LLMDisabled("LLM API key is not configured")
+    base_url = str(llm.get("base_url") or "").rstrip("/")
+    if not base_url:
+        raise LLMDisabled("LLM base_url is not configured")
+
+    endpoint = base_url if base_url.endswith("/chat/completions") else f"{base_url}/chat/completions"
+    model = normalize_model_name(llm.get("model") or "glm5")
+    request_payload = {
+        "model": model,
+        "temperature": float(llm.get("temperature", 0.2)),
+        "max_tokens": int(max_tokens or llm.get("max_tokens", 1200)),
+        "enable_thinking": bool(llm.get("enable_thinking", False)),
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": json.dumps(payload_data, ensure_ascii=False)},
+        ],
+    }
+    req = urllib.request.Request(
+        endpoint,
+        data=json.dumps(request_payload, ensure_ascii=False).encode("utf-8"),
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=int(llm.get("timeout_seconds", 45))) as resp:
+        body = json.loads(resp.read().decode("utf-8"))
+    content = body["choices"][0]["message"]["content"]
+    return extract_json(content), model
+
+
 def sanitize_ai_result(raw: dict, data: dict) -> dict:
     valid_sectors = {item["name"] for item in data.get("sectors", [])}
     constituents = data.get("constituents", {})
@@ -1767,64 +1830,768 @@ def sanitize_ai_result(raw: dict, data: dict) -> dict:
 
 
 def apply_ai_analysis(data: dict, cfg: dict) -> None:
-    llm = cfg.get("llm", {})
-    api_key = str(llm.get("api_key") or "").strip()
-    if not api_key:
-        data.setdefault("meta", {})["aiStatus"] = "disabled"
-        return
-
-    base_url = str(llm.get("base_url") or "").rstrip("/")
-    if not base_url:
-        data.setdefault("meta", {})["aiStatus"] = "disabled"
-        return
-    endpoint = base_url if base_url.endswith("/chat/completions") else f"{base_url}/chat/completions"
-    model = normalize_model_name(llm.get("model") or "glm5")
-    payload = {
-        "model": model,
-        "temperature": float(llm.get("temperature", 0.2)),
-        "max_tokens": int(llm.get("max_tokens", 1200)),
-        "enable_thinking": bool(llm.get("enable_thinking", False)),
-        "messages": [
-            {
-                "role": "system",
-                "content": (
-                    "你是A股板块扫描分析助手。只根据用户提供的数据输出JSON，不要输出Markdown。"
-                    "必须保持客观、简洁，结论仅供研究参考，不构成投资建议。"
-                    "JSON字段为 selectedSectors、signals、picks、strategy。"
-                    "selectedSectors必须从用户给出的sectors.name中选择20个，按最终页面展示优先级排序，不得编造板块。"
-                    "signals每项含dot(bullish/bearish/neutral)、cls(up/down/flat)、text、val。"
-                    "picks每项含cls(top/strong/watch/caution)、score、label、sector、reason、stocks。"
-                    "picks.sector必须来自selectedSectors；核心picks优先选择leadStock非空的候选，stocks必须使用候选板块的leadStock，不要编造股票。"
-                    "strategy含macro、themes、risks；themes每项含name、desc；risks每项含mk、cls、text。"
-                ),
-            },
-            {"role": "user", "content": json.dumps(ai_payload(data), ensure_ascii=False)},
-        ],
-    }
-    req = urllib.request.Request(
-        endpoint,
-        data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
-        headers={
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-        },
-        method="POST",
-    )
     try:
-        with urllib.request.urlopen(req, timeout=int(llm.get("timeout_seconds", 45))) as resp:
-            body = json.loads(resp.read().decode("utf-8"))
-        content = body["choices"][0]["message"]["content"]
-        parsed = extract_json(content)
+        parsed, model = call_llm_json(
+            cfg,
+            (
+                "你是A股板块扫描分析助手。只根据用户提供的数据输出JSON，不要输出Markdown。"
+                "必须保持客观、简洁，结论仅供研究参考，不构成投资建议。"
+                "JSON字段为 selectedSectors、signals、picks、strategy。"
+                "selectedSectors必须从用户给出的sectors.name中选择20个，按最终页面展示优先级排序，不得编造板块。"
+                "signals每项含dot(bullish/bearish/neutral)、cls(up/down/flat)、text、val。"
+                "picks每项含cls(top/strong/watch/caution)、score、label、sector、reason、stocks。"
+                "picks.sector必须来自selectedSectors；核心picks优先选择leadStock非空的候选，stocks必须使用候选板块的leadStock，不要编造股票。"
+                "strategy含macro、themes、risks；themes每项含name、desc；risks每项含mk、cls、text。"
+            ),
+            ai_payload(data),
+        )
         clean = sanitize_ai_result(parsed, data)
         if not clean:
             raise ValueError("AI JSON has no usable fields")
         data.update(clean)
         data.setdefault("meta", {})["aiStatus"] = "ok"
         data.setdefault("meta", {})["aiModel"] = model
+    except LLMDisabled:
+        data.setdefault("meta", {})["aiStatus"] = "disabled"
     except Exception as exc:
         log(f"AI fallback: {exc}")
         data.setdefault("meta", {})["aiStatus"] = "error"
         data.setdefault("meta", {})["aiError"] = type(exc).__name__
+
+
+def normalize_chanlun_symbol(raw: str) -> str:
+    text = str(raw or "").strip()
+    if not text:
+        return ""
+    low = text.lower().replace(".", "")
+    if re.fullmatch(r"(sh|sz|hk)\w+", low):
+        return low
+    upper = text.upper()
+    if upper in {"HSI", "HSTECH"}:
+        return upper
+    digits = re.sub(r"\D", "", text)
+    if re.fullmatch(r"\d{5}", digits):
+        return f"hk{digits}"
+    if re.fullmatch(r"\d{6}", digits):
+        if digits in {"000001", "000300", "000688", "000680"}:
+            return f"sh{digits}"
+        if digits.startswith("399"):
+            return f"sz{digits}"
+        return f"sh{digits}" if digits.startswith(("5", "6", "9")) else f"sz{digits}"
+    return low
+
+
+def chanlun_market(symbol: str) -> str:
+    low = symbol.lower()
+    if low.startswith("hk") or symbol in {"HSI", "HSTECH"}:
+        return "港股" if low.startswith("hk") else "指数"
+    if low.startswith("sh000") or low.startswith("sz399"):
+        return "指数"
+    return "A股"
+
+
+def chanlun_display_code(symbol: str) -> str:
+    low = symbol.lower()
+    if low.startswith("hk"):
+        return low[2:].zfill(5)
+    if low.startswith("sh"):
+        return f"{low[2:].upper()}.SH"
+    if low.startswith("sz"):
+        return f"{low[2:].upper()}.SZ"
+    return symbol.upper()
+
+
+def chanlun_unit(market: str) -> str:
+    if market == "港股":
+        return "HK$"
+    if market == "指数":
+        return "点"
+    return "¥"
+
+
+def chanlun_stock_item(symbol: str, name: str = "") -> dict:
+    symbol = normalize_chanlun_symbol(symbol)
+    known = {item["symbol"].lower(): item for item in CHANLUN_DEFAULT_STOCKS}
+    if symbol.lower() in known:
+        item = copy.deepcopy(known[symbol.lower()])
+        if name:
+            item["name"] = name
+        return item
+    market = chanlun_market(symbol)
+    return {
+        "code": chanlun_display_code(symbol),
+        "symbol": symbol,
+        "name": name or chanlun_display_code(symbol),
+        "market": market,
+        "unit": chanlun_unit(market),
+    }
+
+
+def filter_chanlun_market(items: list[dict], market: str) -> list[dict]:
+    market = (market or "all").lower()
+    if market in {"all", "全部", ""}:
+        return items
+    mapping = {"a": "A股", "ashare": "A股", "hk": "港股", "index": "指数"}
+    target = mapping.get(market, market)
+    return [item for item in items if item.get("market") == target]
+
+
+def chanlun_search(q: str, market: str, cfg: dict) -> list[dict]:
+    q = str(q or "").strip()
+    defaults = copy.deepcopy(CHANLUN_DEFAULT_STOCKS)
+    if not q:
+        return filter_chanlun_market(defaults, market)[:20]
+
+    matched = [
+        item for item in defaults
+        if q.lower() in item["symbol"].lower()
+        or q.lower() in item["code"].lower()
+        or q in item["name"]
+    ]
+    try:
+        rows = first_table_rows(westock_run(["search", q], cfg))
+        seen = {item["symbol"].lower() for item in matched}
+        for row in rows:
+            code = normalize_chanlun_symbol(str(row.get("code") or row.get("symbol") or ""))
+            if not code or code.lower().startswith(("us", "bj")):
+                continue
+            if code.lower() in seen:
+                continue
+            name = str(row.get("name") or "").strip()
+            item = chanlun_stock_item(code, name)
+            if item["market"] in {"A股", "港股", "指数"}:
+                matched.append(item)
+                seen.add(code.lower())
+    except Exception as exc:
+        log(f"chanlun search fallback: {exc}")
+    return filter_chanlun_market(matched, market)[:30]
+
+
+def chanlun_cache_path(symbol: str, period: str, requested: dt.date) -> Path:
+    safe = re.sub(r"[^A-Za-z0-9_.-]+", "_", normalize_chanlun_symbol(symbol))
+    return CACHE_DIR / f"chanlun_{safe}_{period}_{requested.isoformat()}.json"
+
+
+def load_chanlun_cache(symbol: str, period: str, requested: dt.date) -> dict | None:
+    path = chanlun_cache_path(symbol, period, requested)
+    if not path.exists():
+        return None
+    try:
+        with path.open("r", encoding="utf-8") as f:
+            data = json.load(f)
+        data.setdefault("meta", {})["cacheHit"] = True
+        return data
+    except Exception as exc:
+        log(f"chanlun cache read failed: {path.name}: {exc}")
+        return None
+
+
+def write_chanlun_cache(symbol: str, period: str, requested: dt.date, data: dict) -> None:
+    CACHE_DIR.mkdir(exist_ok=True)
+    data.setdefault("meta", {})["cacheHit"] = False
+    with chanlun_cache_path(symbol, period, requested).open("w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+
+
+def row_to_bar(row: dict, d: dt.date | None = None) -> dict | None:
+    date = d or parse_iso_date(get_field(row, "date", "日期", "时间"))
+    if not date:
+        return None
+    open_v = safe_float(get_field(row, "open", "开盘"))
+    close_v = safe_float(get_field(row, "last", "close", "收盘", "最新价"))
+    high_v = safe_float(get_field(row, "high", "最高"))
+    low_v = safe_float(get_field(row, "low", "最低"))
+    volume = safe_float(get_field(row, "volume", "成交量"), 0.0)
+    if not (open_v and close_v and high_v and low_v):
+        return None
+    return {
+        "date": date.isoformat(),
+        "open": round(open_v, 4),
+        "high": round(high_v, 4),
+        "low": round(low_v, 4),
+        "close": round(close_v, 4),
+        "volume": int(volume),
+    }
+
+
+def aggregate_weekly_bars(bars: list[dict]) -> list[dict]:
+    grouped: dict[tuple[int, int], list[dict]] = {}
+    for bar in bars:
+        d = parse_iso_date(bar.get("date"))
+        if not d:
+            continue
+        grouped.setdefault((d.isocalendar().year, d.isocalendar().week), []).append(bar)
+    out = []
+    for _, items in sorted(grouped.items()):
+        items.sort(key=lambda item: item["date"])
+        out.append(
+            {
+                "date": items[-1]["date"],
+                "open": items[0]["open"],
+                "high": max(item["high"] for item in items),
+                "low": min(item["low"] for item in items),
+                "close": items[-1]["close"],
+                "volume": int(sum(safe_float(item.get("volume")) for item in items)),
+            }
+        )
+    return out
+
+
+def fetch_westock_chanlun_bars(symbol: str, period: str, target: dt.date, cfg: dict) -> list[dict]:
+    cl_cfg = cfg.get("chanlun", {})
+    limit = int(cl_cfg.get("westock_kline_limit", cl_cfg.get("bars", 220)))
+    rows = date_rows(first_table_rows(westock_run(["kline", symbol, "--period", period, "--limit", str(limit)], cfg)))
+    bars = []
+    for d, row in rows_until(rows, target):
+        bar = row_to_bar(row, d)
+        if bar:
+            bars.append(bar)
+    return bars[-int(cl_cfg.get("bars", 220)) :]
+
+
+def fetch_akshare_chanlun_bars(symbol: str, period: str, target: dt.date, cfg: dict) -> list[dict]:
+    ak = get_ak()
+    cl_cfg = cfg.get("chanlun", {})
+    bars_limit = int(cl_cfg.get("bars", 220))
+    start = target - dt.timedelta(days=bars_limit * (10 if period == "week" else 3))
+    market = chanlun_market(symbol)
+    low = symbol.lower()
+    rows: list[dict] = []
+    if market == "指数":
+        rows = records(ak.stock_zh_index_daily_em(symbol=low, start_date=ymd(start), end_date=ymd(target)))
+        bars = [bar for d, row in date_rows(rows) if (bar := row_to_bar(row, d))]
+        if period == "week":
+            bars = aggregate_weekly_bars(bars)
+        return bars[-bars_limit:]
+    if market == "港股":
+        code = low[2:].zfill(5)
+        rows = records(
+            ak.stock_hk_hist(
+                symbol=code,
+                period="weekly" if period == "week" else "daily",
+                start_date=ymd(start),
+                end_date=ymd(target),
+                adjust="qfq",
+            )
+        )
+    else:
+        rows = records(
+            ak.stock_zh_a_hist(
+                symbol=low[2:],
+                period="weekly" if period == "week" else "daily",
+                start_date=ymd(start),
+                end_date=ymd(target),
+                adjust="qfq",
+            )
+        )
+    return [bar for d, row in date_rows(rows) if d <= target and (bar := row_to_bar(row, d))][-bars_limit:]
+
+
+def fetch_chanlun_bars(stock: dict, period: str, requested: dt.date, cfg: dict) -> tuple[list[dict], str, str]:
+    target = min(requested, dt.date.today())
+    symbol = normalize_chanlun_symbol(stock["symbol"])
+    primary = str(cfg.get("market", {}).get("primary_source") or "westock").lower()
+    primary_error = ""
+    if primary == "westock":
+        try:
+            bars = fetch_westock_chanlun_bars(symbol, period, target, cfg)
+            if len(bars) >= 35:
+                return bars, "westock", ""
+            primary_error = f"WeStock bars too few: {len(bars)}"
+        except Exception as exc:
+            primary_error = f"WeStock {type(exc).__name__}: {str(exc)[:160]}"
+            log(f"chanlun westock failed: {exc}")
+    try:
+        bars = fetch_akshare_chanlun_bars(symbol, period, target, cfg)
+        if len(bars) >= 35:
+            return bars, "akshare", primary_error
+        raise RuntimeError(f"AKShare bars too few: {len(bars)}")
+    except Exception as exc:
+        if primary_error:
+            raise RuntimeError(f"{primary_error}; AKShare {type(exc).__name__}: {str(exc)[:160]}") from exc
+        raise
+
+
+def chanlun_merge_bars(bars: list[dict]) -> list[dict]:
+    merged = []
+    direction = 1
+    for idx, bar in enumerate(bars):
+        item = {"high": bar["high"], "low": bar["low"], "hiIdx": idx, "loIdx": idx}
+        if not merged:
+            merged.append(item)
+            continue
+        last = merged[-1]
+        incl = (item["high"] <= last["high"] and item["low"] >= last["low"]) or (
+            item["high"] >= last["high"] and item["low"] <= last["low"]
+        )
+        if incl:
+            if len(merged) >= 2:
+                direction = 1 if last["high"] > merged[-2]["high"] else -1
+            if direction == 1:
+                if item["high"] > last["high"]:
+                    last["high"], last["hiIdx"] = item["high"], item["hiIdx"]
+                if item["low"] > last["low"]:
+                    last["low"], last["loIdx"] = item["low"], item["loIdx"]
+            else:
+                if item["low"] < last["low"]:
+                    last["low"], last["loIdx"] = item["low"], item["loIdx"]
+                if item["high"] < last["high"]:
+                    last["high"], last["hiIdx"] = item["high"], item["hiIdx"]
+        else:
+            merged.append(item)
+    return merged
+
+
+def chanlun_fractals(merged: list[dict]) -> list[dict]:
+    out = []
+    for idx in range(1, len(merged) - 1):
+        a, b, c = merged[idx - 1], merged[idx], merged[idx + 1]
+        if b["high"] > a["high"] and b["high"] > c["high"] and b["low"] > a["low"] and b["low"] > c["low"]:
+            out.append({"type": "top", "mIdx": idx, "kIdx": b["hiIdx"], "price": b["high"]})
+        elif b["low"] < a["low"] and b["low"] < c["low"] and b["high"] < a["high"] and b["high"] < c["high"]:
+            out.append({"type": "bottom", "mIdx": idx, "kIdx": b["loIdx"], "price": b["low"]})
+    return out
+
+
+def chanlun_strokes(fractals: list[dict], min_gap: int) -> list[dict]:
+    pts = []
+    for item in fractals:
+        f = {key: item[key] for key in ("type", "mIdx", "kIdx", "price")}
+        if not pts:
+            pts.append(f)
+            continue
+        last = pts[-1]
+        if f["type"] == last["type"]:
+            if (f["type"] == "top" and f["price"] > last["price"]) or (
+                f["type"] == "bottom" and f["price"] < last["price"]
+            ):
+                pts[-1] = f
+        else:
+            valid = (f["type"] == "top" and f["price"] > last["price"]) or (
+                f["type"] == "bottom" and f["price"] < last["price"]
+            )
+            if f["mIdx"] - last["mIdx"] >= min_gap and valid:
+                pts.append(f)
+    return pts
+
+
+def chanlun_segments(pts: list[dict]) -> list[dict]:
+    segs = []
+    if len(pts) < 2:
+        return segs
+    start = 0
+    guard = 0
+    while start < len(pts) - 1 and guard < 200:
+        guard += 1
+        direction = 1 if pts[start + 1]["price"] > pts[start]["price"] else -1
+        ext = start + 1
+        end = -1
+        for idx in range(start + 2, len(pts)):
+            p = pts[idx]
+            if direction == 1:
+                if p["type"] == "top" and p["price"] >= pts[ext]["price"]:
+                    ext = idx
+                if p["type"] == "bottom" and ((ext > start + 1 and p["price"] < pts[ext - 1]["price"]) or p["price"] < pts[start]["price"]):
+                    end = ext
+                    break
+            else:
+                if p["type"] == "bottom" and p["price"] <= pts[ext]["price"]:
+                    ext = idx
+                if p["type"] == "top" and ((ext > start + 1 and p["price"] > pts[ext - 1]["price"]) or p["price"] > pts[start]["price"]):
+                    end = ext
+                    break
+        if end == -1:
+            segs.append({"from": start, "to": ext, "dir": direction, "confirmed": False})
+            if ext >= len(pts) - 1:
+                break
+            start = ext
+        else:
+            segs.append({"from": start, "to": end, "dir": direction, "confirmed": True})
+            start = end
+    return segs
+
+
+def chanlun_pivots(pts: list[dict]) -> list[dict]:
+    pivots = []
+    idx = 0
+    while idx + 3 < len(pts):
+        highs, lows = [], []
+        for step in range(3):
+            a, b = pts[idx + step], pts[idx + step + 1]
+            highs.append(max(a["price"], b["price"]))
+            lows.append(min(a["price"], b["price"]))
+        zg, zd = min(highs), max(lows)
+        if zg > zd:
+            end_pt = idx + 3
+            while end_pt + 1 < len(pts):
+                a2, b2 = pts[end_pt], pts[end_pt + 1]
+                hi, lo = max(a2["price"], b2["price"]), min(a2["price"], b2["price"])
+                if hi >= zd and lo <= zg:
+                    end_pt += 1
+                else:
+                    break
+            pivots.append(
+                {
+                    "zg": round(zg, 4),
+                    "zd": round(zd, 4),
+                    "fromPt": idx,
+                    "toPt": end_pt,
+                    "startK": pts[idx]["kIdx"],
+                    "endK": pts[end_pt]["kIdx"],
+                    "strokes": end_pt - idx,
+                }
+            )
+            idx = end_pt
+        else:
+            idx += 1
+    return pivots
+
+
+def chanlun_macd_series(closes: list[float]) -> dict:
+    if not closes:
+        return {"dif": [], "dea": [], "hist": []}
+    dif, dea, hist = [], [], []
+    e12 = e26 = closes[0]
+    d = 0.0
+    for idx, close in enumerate(closes):
+        e12 = closes[0] if idx == 0 else (e12 * 11 + close * 2) / 13
+        e26 = closes[0] if idx == 0 else (e26 * 25 + close * 2) / 27
+        df = e12 - e26
+        d = df if idx == 0 else (d * 8 + df * 2) / 10
+        dif.append(round(df, 6))
+        dea.append(round(d, 6))
+        hist.append(round((df - d) * 2, 6))
+    return {"dif": dif, "dea": dea, "hist": hist}
+
+
+def chanlun_macd_area(macd_data: dict, k1: int, k2: int, sign: int) -> float:
+    total = 0.0
+    hist = macd_data.get("hist", [])
+    for idx in range(max(0, k1), min(len(hist) - 1, k2) + 1):
+        if hist[idx] * sign > 0:
+            total += abs(hist[idx])
+    return total
+
+
+def chanlun_compare_legs(pts: list[dict], segs: list[dict], macd_data: dict, idx: int) -> dict | None:
+    c = segs[idx]
+    b = segs[idx - 2] if idx >= 2 else None
+    if not b or b["dir"] != c["dir"]:
+        return None
+    c_end, b_end = pts[c["to"]], pts[b["to"]]
+    new_ext = c_end["price"] > b_end["price"] if c["dir"] == 1 else c_end["price"] < b_end["price"]
+    area_c = chanlun_macd_area(macd_data, pts[c["from"]]["kIdx"], c_end["kIdx"], c["dir"])
+    area_b = chanlun_macd_area(macd_data, pts[b["from"]]["kIdx"], b_end["kIdx"], b["dir"])
+    ratio = area_c / area_b if area_b > 0 else 1
+    return {
+        "dir": c["dir"],
+        "newExt": bool(new_ext),
+        "areaB": round(area_b, 6),
+        "areaC": round(area_c, 6),
+        "ratio": round(ratio, 6),
+        "detected": bool(new_ext and area_b > 0 and area_c < area_b * 0.95),
+        "type": "底背驰" if c["dir"] == -1 else "顶背驰",
+        "cFromK": pts[c["from"]]["kIdx"],
+        "cToK": c_end["kIdx"],
+        "bFromK": pts[b["from"]]["kIdx"],
+        "bToK": b_end["kIdx"],
+        "cPrice": c_end["price"],
+        "bPrice": b_end["price"],
+        "segIdx": idx,
+        "confirmed": bool(c["confirmed"]),
+    }
+
+
+def chanlun_divergence(pts: list[dict], segs: list[dict], macd_data: dict) -> dict | None:
+    if len(segs) < 3:
+        return None
+    return chanlun_compare_legs(pts, segs, macd_data, len(segs) - 1)
+
+
+def chanlun_signals(pts: list[dict], segs: list[dict], pivots: list[dict], macd_data: dict) -> list[dict]:
+    signals = []
+    for idx in range(2, len(segs)):
+        cmp_data = chanlun_compare_legs(pts, segs, macd_data, idx)
+        if not cmp_data or not cmp_data["detected"]:
+            continue
+        end_pt = pts[segs[idx]["to"]]
+        buy = cmp_data["dir"] == -1
+        signals.append(
+            {
+                "kind": "B1" if buy else "S1",
+                "label": "第一类买点" if buy else "第一类卖点",
+                "kIdx": end_pt["kIdx"],
+                "price": end_pt["price"],
+                "forming": idx == len(segs) - 1 and not segs[idx]["confirmed"],
+                "facts": {"div": cmp_data},
+            }
+        )
+        p2_idx = segs[idx]["to"] + 2
+        if p2_idx < len(pts):
+            p2 = pts[p2_idx]
+            ok2 = (p2["type"] == "bottom" and p2["price"] > end_pt["price"]) if buy else (
+                p2["type"] == "top" and p2["price"] < end_pt["price"]
+            )
+            if ok2:
+                signals.append(
+                    {
+                        "kind": "B2" if buy else "S2",
+                        "label": "第二类买点" if buy else "第二类卖点",
+                        "kIdx": p2["kIdx"],
+                        "price": p2["price"],
+                        "facts": {"ref": {"kIdx": end_pt["kIdx"], "price": end_pt["price"]}, "pull": p2["price"]},
+                    }
+                )
+    for pv in pivots:
+        for idx in range(pv["toPt"] + 1, min(len(pts) - 1, pv["toPt"] + 5) + 1):
+            p = pts[idx]
+            if p["type"] == "top" and p["price"] > pv["zg"]:
+                nb = pts[idx + 1]
+                if nb["type"] == "bottom" and nb["price"] > pv["zg"]:
+                    signals.append(
+                        {
+                            "kind": "B3",
+                            "label": "第三类买点",
+                            "kIdx": nb["kIdx"],
+                            "price": nb["price"],
+                            "facts": {"pivot": pv, "breakPt": {"kIdx": p["kIdx"], "price": p["price"]}, "pull": nb["price"]},
+                        }
+                    )
+                break
+            if p["type"] == "bottom" and p["price"] < pv["zd"]:
+                nt = pts[idx + 1]
+                if nt["type"] == "top" and nt["price"] < pv["zd"]:
+                    signals.append(
+                        {
+                            "kind": "S3",
+                            "label": "第三类卖点",
+                            "kIdx": nt["kIdx"],
+                            "price": nt["price"],
+                            "facts": {"pivot": pv, "breakPt": {"kIdx": p["kIdx"], "price": p["price"]}, "pull": nt["price"]},
+                        }
+                    )
+                break
+    signals.sort(key=lambda item: (item["kIdx"], item["kind"]))
+    out, seen = [], set()
+    for item in signals:
+        key = f'{item["kind"]}@{item["kIdx"]}'
+        if key in seen:
+            continue
+        seen.add(key)
+        item["id"] = key
+        out.append(item)
+    return out
+
+
+def chanlun_trend(segs: list[dict], pivots: list[dict]) -> dict:
+    if len(pivots) >= 2:
+        p1, p2 = pivots[-2], pivots[-1]
+        if p2["zd"] > p1["zg"]:
+            return {"kind": "up", "text": "上涨趋势", "detail": "相邻两中枢依次上移(后中枢ZD高于前中枢ZG)"}
+        if p2["zg"] < p1["zd"]:
+            return {"kind": "down", "text": "下跌趋势", "detail": "相邻两中枢依次下移(后中枢ZG低于前中枢ZD)"}
+        return {"kind": "range", "text": "盘整", "detail": "相邻中枢区间重叠,走势仍属盘整范畴"}
+    if segs:
+        return (
+            {"kind": "up", "text": "向上盘整", "detail": "当前线段向上,但未形成两个以上同向中枢"}
+            if segs[-1]["dir"] == 1
+            else {"kind": "down", "text": "向下盘整", "detail": "当前线段向下,但未形成两个以上同向中枢"}
+        )
+    return {"kind": "range", "text": "盘整", "detail": "结构尚不充分"}
+
+
+def analyze_chanlun_bars(bars: list[dict], cfg: dict) -> dict:
+    merged = chanlun_merge_bars(bars)
+    fractals = chanlun_fractals(merged)
+    pts = chanlun_strokes(fractals, int(cfg.get("chanlun", {}).get("min_stroke_gap", 4)))
+    segs = chanlun_segments(pts)
+    pivots = chanlun_pivots(pts)
+    macd_data = chanlun_macd_series([safe_float(bar.get("close")) for bar in bars])
+    divergence = chanlun_divergence(pts, segs, macd_data)
+    signals = chanlun_signals(pts, segs, pivots, macd_data)
+    trend = chanlun_trend(segs, pivots)
+    tops = sum(1 for item in fractals if item["type"] == "top")
+    bottoms = sum(1 for item in fractals if item["type"] == "bottom")
+    return {
+        "merged": merged,
+        "fractals": fractals,
+        "pts": pts,
+        "segs": segs,
+        "pivots": pivots,
+        "macd": macd_data,
+        "divergence": divergence,
+        "signals": signals,
+        "trend": trend,
+        "stats": {
+            "tops": tops,
+            "bottoms": bottoms,
+            "strokes": max(0, len(pts) - 1),
+            "segments": len(segs),
+            "pivots": len(pivots),
+        },
+    }
+
+
+def fmt_chanlun_price(value: Any) -> str:
+    return f"{safe_float(value):,.2f}"
+
+
+def build_chanlun_verdict(stock: dict, bars: list[dict], analysis: dict) -> dict:
+    last = bars[-1]
+    n = len(bars)
+    signals = analysis.get("signals", [])
+    latest = signals[-1] if signals else None
+    active = bool(latest and (n - 1 - int(latest["kIdx"])) <= 20)
+    div = analysis.get("divergence")
+    trend = analysis.get("trend", {})
+    last_pv = (analysis.get("pivots") or [])[-1] if analysis.get("pivots") else None
+    if last_pv:
+        if last["close"] > last_pv["zg"]:
+            pivot_rel = "最近中枢上方"
+        elif last["close"] < last_pv["zd"]:
+            pivot_rel = "最近中枢下方"
+        else:
+            pivot_rel = "最近中枢区间内"
+    else:
+        pivot_rel = "无中枢参照"
+    if active:
+        buy = latest["kind"].startswith("B")
+        headline = f'{trend.get("text", "盘整")}中,近端出现{latest["label"]}{"(形成中)" if latest.get("forming") else ""},结构{"偏多" if buy else "偏空"}。'
+        body = (
+            f'{bars[latest["kIdx"]]["date"]} 于 {fmt_chanlun_price(latest["price"])} 识别出{latest["label"]};'
+            f'现价 {fmt_chanlun_price(last["close"])},处于{pivot_rel}。判定依据:{trend.get("detail", "结构尚不充分")}。'
+        )
+    else:
+        headline = f'{trend.get("text", "盘整")}格局,暂无新增买卖点信号。'
+        if latest:
+            body = (
+                f'{trend.get("detail", "结构尚不充分")}。最近一个信号为 {bars[latest["kIdx"]]["date"]} 的'
+                f'{latest["label"]}({fmt_chanlun_price(latest["price"])}),距今已 {n - 1 - latest["kIdx"]} 根K线;'
+                f'现价处于{pivot_rel},等待新的背驰信号或中枢突破后的回抽确认。'
+            )
+        else:
+            body = (
+                f'{trend.get("detail", "结构尚不充分")}。样本期内未出现符合定义的三类买卖点;'
+                f'现价处于{pivot_rel},等待新的背驰信号或中枢突破后的回抽确认。'
+            )
+    risks = []
+    if div and div.get("detected") and not div.get("confirmed"):
+        risks.append("末段走势未完成,背驰判定将随新K线动态变化")
+    if latest and latest.get("forming") and active:
+        risks.append(f'{latest["label"]}尚在形成中,需待线段终结确认')
+    risks.append("缠论判定存在级别与主观性差异,本页仅为技术结构辅助,不构成投资建议")
+    metas = [
+        {
+            "k": "走势类型",
+            "v": trend.get("text", "盘整"),
+            "note": f'{analysis.get("stats", {}).get("pivots", 0)} 个中枢参与判定',
+            "tone": "var(--up)" if trend.get("kind") == "up" else "var(--down)" if trend.get("kind") == "down" else None,
+        },
+        {
+            "k": "最新信号",
+            "v": latest["label"] if latest else "暂无",
+            "note": f'{bars[latest["kIdx"]]["date"]} · {fmt_chanlun_price(latest["price"])}' if latest else "样本期内无",
+            "tone": "var(--up)" if latest and latest["kind"].startswith("B") else "var(--down)" if latest else None,
+        },
+        {
+            "k": "背驰状态",
+            "v": (div["type"] if div and div.get("detected") else "无背驰") if div else "不可比",
+            "note": f'c段/b段 MACD 面积比 {(safe_float(div.get("ratio")) * 100):.0f}%' if div else "线段数量不足",
+            "tone": "#a63a32" if div and div.get("detected") else None,
+        },
+        {
+            "k": "现价位置",
+            "v": pivot_rel,
+            "note": f'中枢区间 [{fmt_chanlun_price(last_pv["zd"])} - {fmt_chanlun_price(last_pv["zg"])}]' if last_pv else "—",
+        },
+    ]
+    return {"headline": headline, "body": body, "risk": ";".join(risks) + "。", "metas": metas}
+
+
+def chanlun_ai_payload(data: dict) -> dict:
+    analysis = data.get("analysis", {})
+    bars = data.get("bars", [])
+    return {
+        "meta": data.get("meta", {}),
+        "stock": data.get("stock", {}),
+        "lastBar": bars[-1] if bars else {},
+        "recentBars": bars[-20:],
+        "stats": analysis.get("stats", {}),
+        "trend": analysis.get("trend", {}),
+        "divergence": analysis.get("divergence"),
+        "latestPivots": analysis.get("pivots", [])[-3:],
+        "latestSignals": analysis.get("signals", [])[-5:],
+    }
+
+
+def apply_chanlun_ai(data: dict, cfg: dict) -> None:
+    try:
+        parsed, model = call_llm_json(
+            cfg,
+            (
+                "你是缠论技术结构复盘助手。只根据用户提供的K线结构、分型、笔、线段、中枢、背驰和买卖点事实输出JSON。"
+                "不要输出Markdown。不要给投资建议、买入卖出指令、收益承诺或仓位建议。"
+                "JSON字段仅允许 headline、body、risk、notes。headline和body用于复盘摘要，risk用于风险提示，notes为字符串数组。"
+                "必须强调结构信号仅供学习研究和复盘参考。"
+            ),
+            chanlun_ai_payload(data),
+            max_tokens=900,
+        )
+        verdict = data.setdefault("verdict", {})
+        for key, limit in {"headline": 90, "body": 260, "risk": 180}.items():
+            value = str(parsed.get(key, "")).strip()
+            if value:
+                verdict[key] = value[:limit]
+        notes = parsed.get("notes")
+        if isinstance(notes, list):
+            verdict["notes"] = [str(item).strip()[:120] for item in notes[:4] if str(item).strip()]
+        data.setdefault("meta", {})["aiStatus"] = "ok"
+        data.setdefault("meta", {})["aiModel"] = model
+        data["ai"] = {"status": "ok", "model": model}
+    except LLMDisabled:
+        data.setdefault("meta", {})["aiStatus"] = "disabled"
+        data["ai"] = {"status": "disabled"}
+    except Exception as exc:
+        log(f"chanlun AI fallback: {exc}")
+        data.setdefault("meta", {})["aiStatus"] = "error"
+        data.setdefault("meta", {})["aiError"] = type(exc).__name__
+        data["ai"] = {"status": "error", "error": type(exc).__name__}
+
+
+def build_chanlun_analysis(symbol: str, period: str, requested: dt.date, cfg: dict, force_refresh: bool = False) -> dict:
+    period = period if period in {"day", "week"} else "day"
+    normalized = normalize_chanlun_symbol(symbol)
+    if not force_refresh:
+        cached = load_chanlun_cache(normalized, period, requested)
+        if cached:
+            return cached
+    stock = chanlun_stock_item(normalized)
+    bars, provider, primary_error = fetch_chanlun_bars(stock, period, requested, cfg)
+    if len(bars) < 35:
+        raise RuntimeError(f"Not enough bars for ChanLun analysis: {len(bars)}")
+    trade_date = parse_iso_date(bars[-1]["date"]) or requested
+    analysis = analyze_chanlun_bars(bars, cfg)
+    data = {
+        "meta": {
+            "source": "WeStock Data · 腾讯自选股" if provider == "westock" else "AKShare · 备选数据源",
+            "dataProvider": provider,
+            "primaryFallback": primary_error,
+            "asOf": dt.datetime.now().strftime("%Y-%m-%d %H:%M"),
+            "requestedDate": requested.isoformat(),
+            "tradeDate": trade_date.isoformat(),
+            "period": period,
+            "dataStatus": "live",
+            "cacheHit": False,
+        },
+        "stock": stock,
+        "bars": bars,
+        "analysis": analysis,
+        "verdict": build_chanlun_verdict(stock, bars, analysis),
+        "ai": {},
+    }
+    apply_chanlun_ai(data, cfg)
+    write_chanlun_cache(normalized, period, requested, data)
+    return data
 
 
 def build_akshare_scan(requested: dt.date, cfg: dict) -> dict:
@@ -2012,6 +2779,12 @@ class SectorScanHandler(SimpleHTTPRequestHandler):
         if parsed.path == "/api/scan":
             self.handle_scan(parsed)
             return
+        if parsed.path == "/api/chanlun/search":
+            self.handle_chanlun_search(parsed)
+            return
+        if parsed.path == "/api/chanlun/analyze":
+            self.handle_chanlun_analyze(parsed)
+            return
         if not self.prepare_static_path(parsed.path):
             return
         super().do_GET()
@@ -2042,6 +2815,10 @@ class SectorScanHandler(SimpleHTTPRequestHandler):
     def prepare_static_path(self, raw_path: str) -> bool:
         if raw_path == "/":
             self.path = "/A股板块分析终端.html"
+        elif raw_path in {"/chanlun", "/chanlun/"}:
+            self.path = "/缠论/index.html"
+        elif raw_path in {"/sector", "/sector/"}:
+            self.path = "/A股板块分析终端.html"
         if self.is_private_path(raw_path):
             self.send_error(404)
             return False
@@ -2066,6 +2843,67 @@ class SectorScanHandler(SimpleHTTPRequestHandler):
             except Exception as exc:
                 log(f"scan fallback: {exc}")
                 data = fallback_data(requested, type(exc).__name__, cfg=cfg)
+        self.send_json(data)
+
+    def handle_chanlun_search(self, parsed: urllib.parse.ParseResult) -> None:
+        params = urllib.parse.parse_qs(parsed.query)
+        q = (params.get("q") or [""])[0]
+        market = (params.get("market") or ["all"])[0]
+        cfg = self.server.config
+        try:
+            items = chanlun_search(q, market, cfg)
+            data = {"items": items, "meta": {"query": q, "market": market, "count": len(items)}}
+        except Exception as exc:
+            log(f"chanlun search error: {exc}")
+            data = {"items": [], "meta": {"query": q, "market": market, "count": 0, "error": type(exc).__name__}}
+        self.send_json(data)
+
+    def handle_chanlun_analyze(self, parsed: urllib.parse.ParseResult) -> None:
+        params = urllib.parse.parse_qs(parsed.query)
+        symbol = (params.get("symbol") or ["600519"])[0]
+        period = (params.get("period") or ["day"])[0]
+        requested = parse_request_date((params.get("date") or [None])[0])
+        force_refresh = str((params.get("refresh") or ["0"])[0]).lower() in {"1", "true", "yes"}
+        cfg = self.server.config
+        with _scan_lock:
+            try:
+                data = build_chanlun_analysis(symbol, period, requested, cfg, force_refresh=force_refresh)
+            except Exception as exc:
+                log(f"chanlun analysis error: {exc}")
+                data = {
+                    "meta": {
+                        "requestedDate": requested.isoformat(),
+                        "period": period,
+                        "dataStatus": "error",
+                        "aiStatus": "fallback",
+                        "error": type(exc).__name__,
+                        "message": str(exc)[:240],
+                    },
+                    "stock": chanlun_stock_item(symbol),
+                    "bars": [],
+                    "analysis": {
+                        "merged": [],
+                        "fractals": [],
+                        "pts": [],
+                        "segs": [],
+                        "pivots": [],
+                        "macd": {"dif": [], "dea": [], "hist": []},
+                        "divergence": None,
+                        "signals": [],
+                        "trend": {"kind": "range", "text": "不可分析", "detail": "数据源暂不可用"},
+                        "stats": {"tops": 0, "bottoms": 0, "strokes": 0, "segments": 0, "pivots": 0},
+                    },
+                    "verdict": {
+                        "headline": "暂时无法完成缠论分析。",
+                        "body": "行情数据源暂不可用或K线样本不足,请稍后重试或切换标的。",
+                        "risk": "本页仅供学习研究和复盘参考,不构成投资建议。",
+                        "metas": [],
+                    },
+                    "ai": {"status": "fallback"},
+                }
+        self.send_json(data)
+
+    def send_json(self, data: dict) -> None:
         body = json.dumps(data, ensure_ascii=False).encode("utf-8")
         self.send_response(200)
         self.send_header("Content-Type", "application/json; charset=utf-8")

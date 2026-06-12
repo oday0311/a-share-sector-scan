@@ -9,3 +9,6 @@ uploads/
 bridge/
 com.local.sector-scan.plist
 *.log
+缠论/缠论分析决策台(离线版).html
+缠论/tweaks-panel.jsx
+缠论/js/chanlun.js
