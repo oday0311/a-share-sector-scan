@@ -214,9 +214,14 @@ function DivergencePanel({ an }) {
 
 // ---------- 分项:买卖点记录 ----------
 function SignalListPanel({ an, bars, selectedId, onSelect }) {
+  const buyCount = an.signals.filter((s) => s.kind[0] === 'B').length;
+  const sellCount = an.signals.filter((s) => s.kind[0] === 'S').length;
   return (
     <div className="panel" data-comment-anchor="signals">
-      <h3 className="panel-title">买卖点记录 <span className="panel-hint">点击行或图中标记展开推理</span></h3>
+      <h3 className="panel-title">
+        买卖点记录
+        <span className="panel-hint">买点 {buyCount} · 卖点 {sellCount} · 点击行或图中标记展开推理</span>
+      </h3>
       {an.signals.length === 0 && <p className="empty-note">样本期内未识别出符合定义的三类买卖点。</p>}
       <div className="sig-list">
         {an.signals.map((s) => {

@@ -75,6 +75,7 @@ a { color: inherit; }
 }
 .mini-btn:hover, .tool-toggle:hover { border-color: #cfc7b6; background: #f8f4ea; }
 .mini-btn:disabled { opacity: .55; cursor: wait; }
+.tool-toggle:disabled { opacity: .48; cursor: not-allowed; background: #f6f1e6; }
 .tool-toggle.on { background: var(--ink); color: #fdf9f0; border-color: var(--ink); }
 .searchbox { position: relative; flex: 0 1 360px; min-width: 240px; }
 .search-icon { position: absolute; left: 11px; top: 50%; transform: translateY(-52%); color: var(--ink2); pointer-events: none; }

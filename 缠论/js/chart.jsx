@@ -189,13 +189,13 @@ function ChanChart({ bars, an, showFractals, shadeDiv, onSelectSignal, selectedI
         {/* ---- MACD 副图 ---- */}
         <line x1={CH_PAD_L} x2={CHART_W - CH_PAD_R} y1={MACD_T + MACD_H / 2} y2={MACD_T + MACD_H / 2} stroke="#e7e2d6" />
         <text x={CH_PAD_L + 2} y={MACD_T + 12} fontSize="11" fill="#8a8676" fontFamily="var(--sans)">MACD (12, 26, 9)</text>
-        {shadeDiv && div && div.detected && (
+        {shadeDiv && div && (
           <g>
             <rect x={x(div.bFromK)} y={MACD_T} width={Math.max(4, x(div.bToK) - x(div.bFromK))} height={MACD_H}
-              fill="#2c4a73" fillOpacity="0.07" />
+              fill="#2c4a73" fillOpacity={div.detected ? '0.08' : '0.045'} />
             <text x={(x(div.bFromK) + x(div.bToK)) / 2} y={MACD_T + 12} fontSize="10" fill="#2c4a73" textAnchor="middle" fontFamily="var(--mono)">b段</text>
             <rect x={x(div.cFromK)} y={MACD_T} width={Math.max(4, x(div.cToK) - x(div.cFromK))} height={MACD_H}
-              fill="#a63a32" fillOpacity="0.07" />
+              fill="#a63a32" fillOpacity={div.detected ? '0.08' : '0.045'} />
             <text x={(x(div.cFromK) + x(div.cToK)) / 2} y={MACD_T + 12} fontSize="10" fill="#a63a32" textAnchor="middle" fontFamily="var(--mono)">c段</text>
           </g>
         )}

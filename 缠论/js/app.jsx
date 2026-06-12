@@ -6,9 +6,52 @@ const PERIODS = [
   { id: 'day', label: '日线' },
   { id: 'week', label: '周线' }
 ];
+const LAST_QUERY_KEY = 'chanlun:last-query:v1';
 
-function SearchBox({ onPick }) {
-  const [q, setQ] = useState('');
+function stockDisplayCode(s) {
+  return s ? (s.code || (s.symbol || '').replace(/^(sh|sz|hk)/, '')) : '';
+}
+
+function fallbackStock() {
+  return CLD.STOCKS.find((s) => s.symbol === 'sh000001') || CLD.STOCKS[0];
+}
+
+function readLastQuery() {
+  try {
+    const raw = localStorage.getItem(LAST_QUERY_KEY);
+    if (!raw) return null;
+    const data = JSON.parse(raw);
+    if (!data || !data.stock || !data.stock.symbol) return null;
+    return data;
+  } catch (err) {
+    return null;
+  }
+}
+
+function validPeriod(value) {
+  return PERIODS.some((p) => p.id === value) ? value : 'day';
+}
+
+function writeLastQuery(stock, period, date) {
+  try {
+    localStorage.setItem(LAST_QUERY_KEY, JSON.stringify({
+      stock: {
+        code: stock.code,
+        symbol: stock.symbol,
+        name: stock.name,
+        market: stock.market,
+        unit: stock.unit
+      },
+      period,
+      date
+    }));
+  } catch (err) {
+    /* localStorage may be disabled in private contexts. */
+  }
+}
+
+function SearchBox({ selected, onPick }) {
+  const [q, setQ] = useState(stockDisplayCode(selected));
   const [open, setOpen] = useState(false);
   const [mk, setMk] = useState('全部');
   const [list, setList] = useState(CLD.defaultStocks('全部'));
@@ -22,7 +65,15 @@ function SearchBox({ onPick }) {
   }, []);
 
   useEffect(() => {
+    if (!open) setQ(stockDisplayCode(selected));
+  }, [selected && selected.symbol, selected && selected.code, open]);
+
+  useEffect(() => {
     let alive = true;
+    if (!open) {
+      setLoading(false);
+      return () => { alive = false; };
+    }
     const query = q.trim();
     if (!query) {
       setList(CLD.defaultStocks(mk));
@@ -36,12 +87,12 @@ function SearchBox({ onPick }) {
         .finally(() => { if (alive) setLoading(false); });
     }, 180);
     return () => { alive = false; clearTimeout(timer); };
-  }, [q, mk]);
+  }, [q, mk, open]);
 
   const pick = (s) => {
     onPick(s);
     setOpen(false);
-    setQ('');
+    setQ(stockDisplayCode(s));
   };
 
   return (
@@ -120,9 +171,10 @@ function EmptyState({ error, loading }) {
 }
 
 function App() {
-  const [stock, setStock] = useState(CLD.STOCKS.find((s) => s.symbol === 'sh600519') || CLD.STOCKS[0]);
-  const [period, setPeriod] = useState('day');
-  const [date, setDate] = useState(CLD.todayISO());
+  const saved = readLastQuery();
+  const [stock, setStock] = useState(saved && saved.stock ? saved.stock : fallbackStock());
+  const [period, setPeriod] = useState(validPeriod(saved && saved.period ? saved.period : 'day'));
+  const [date, setDate] = useState(saved && saved.date ? saved.date : CLD.todayISO());
   const [payload, setPayload] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -147,6 +199,7 @@ function App() {
 
   useEffect(() => {
     setSel(null);
+    writeLastQuery(stock, period, date);
     load(false);
   }, [stock.symbol, period, date]);
 
@@ -161,7 +214,8 @@ function App() {
   const redUp = true;
   const up = redUp ? '#bf3a30' : '#1e8a5e';
   const dn = redUp ? '#1e8a5e' : '#bf3a30';
-  const periodLabel = PERIODS.find((p) => p.id === period).label;
+  const periodLabel = (PERIODS.find((p) => p.id === period) || PERIODS[0]).label;
+  const hasDivergenceRange = !!(an && an.divergence);
   const statusText = data.meta
     ? `${data.meta.dataProvider || '数据源'}${data.meta.cacheHit ? ' · 本地缓存' : ''} · AI ${data.meta.aiStatus || 'fallback'}`
     : '等待数据';
@@ -180,7 +234,7 @@ function App() {
           <a href="/sector">板块扫描</a>
           <a className="active" href="/chanlun">缠论分析</a>
         </nav>
-        <SearchBox onPick={setStock} />
+        <SearchBox selected={stock} onPick={setStock} />
         <div className="top-actions">
           <label className="date-field">
             <span>日期</span>
@@ -239,7 +293,11 @@ function App() {
               </div>
               <div className="chart-tools">
                 <button type="button" className={'tool-toggle' + (showFractals ? ' on' : '')} onClick={() => setShowFractals(!showFractals)}>分型</button>
-                <button type="button" className={'tool-toggle' + (shadeDiv ? ' on' : '')} onClick={() => setShadeDiv(!shadeDiv)}>背驰区间</button>
+                <button type="button"
+                  className={'tool-toggle' + (shadeDiv && hasDivergenceRange ? ' on' : '')}
+                  disabled={!hasDivergenceRange}
+                  title={hasDivergenceRange ? '显示/隐藏 b段与c段力度比较区间' : '线段数量不足,暂无可比较区间'}
+                  onClick={() => setShadeDiv(!shadeDiv)}>背驰区间</button>
               </div>
               <Legend showFractals={showFractals} />
             </div>

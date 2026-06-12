@@ -2343,7 +2343,7 @@ def chanlun_signals(pts: list[dict], segs: list[dict], pivots: list[dict], macd_
                     }
                 )
     for pv in pivots:
-        for idx in range(pv["toPt"] + 1, min(len(pts) - 1, pv["toPt"] + 5) + 1):
+        for idx in range(pv["toPt"] + 1, min(len(pts) - 2, pv["toPt"] + 5) + 1):
             p = pts[idx]
             if p["type"] == "top" and p["price"] > pv["zg"]:
                 nb = pts[idx + 1]
