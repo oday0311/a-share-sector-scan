@@ -199,19 +199,24 @@ body {
 .index-bar {
   max-width: 1240px;
   margin: 18px auto 0;
-  display: flex; gap: 0; background: var(--card);
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 0;
+  background: var(--hair);
   border: 1px solid var(--hair);
   border-radius: 5px;
-  overflow-x: auto; box-shadow: none;
-  scrollbar-width: thin;
+  overflow: hidden;
 }
-.index-bar::-webkit-scrollbar { height: 5px; }
-.index-bar::-webkit-scrollbar-track { background: transparent; }
-.index-bar::-webkit-scrollbar-thumb { background: #cfc7b6; border-radius: 999px; }
 .idx-item {
-  padding: 13px 18px; border-right: 1px solid var(--hair);
-  min-width: 168px; flex-shrink: 0; position: relative;
+  padding: 13px 18px;
+  background: var(--card);
+  border-right: 1px solid var(--hair);
+  border-bottom: 1px solid var(--hair);
+  position: relative;
 }
+.idx-item:nth-child(even) { border-right: none; }
+.idx-item:nth-last-child(1),
+.idx-item:nth-last-child(2) { border-bottom: none; }
 .idx-item::after {
   content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 3px;
   background: transparent;

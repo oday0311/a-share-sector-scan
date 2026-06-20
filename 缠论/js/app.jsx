@@ -246,6 +246,9 @@ function App() {
         <nav className="module-tabs" aria-label="功能模块">
           <a href="/sector">板块扫描</a>
           <a className="active" href="/chanlun">缠论分析</a>
+          <a href="/decision">决策看板</a>
+          <a href="/review">大盘复盘</a>
+          <a href="/help">帮助</a>
         </nav>
         <SearchBox selected={stock} onPick={setStock} />
         <div className="top-actions">
@@ -253,7 +256,7 @@ function App() {
             <span>日期</span>
             <input type="date" value={date} onChange={(e) => setDate(e.target.value)} />
           </label>
-          <button type="button" className="mini-btn" onClick={() => load(true)} disabled={loading}>重新分析</button>
+          <button type="button" className="mini-btn primary" onClick={() => load(true)} disabled={loading}>重新分析</button>
         </div>
         <div className="top-meta">数据截至 {data.meta ? data.meta.tradeDate : '—'}<em>{statusText}</em></div>
       </header>

@@ -20,6 +20,7 @@
 
   let RANGE = 't'; // 't' | 'd5' | 'd20'
   let SORT = { key: 'today', dir: -1 };
+  const SCAN_DATE_KEY = 'sector:last-scan-date';
   let trendChart = null, ddChart = null;
   const hiddenSeries = new Set();
 
@@ -39,14 +40,15 @@
     const grid = $('#heatmap');
     grid.innerHTML = '';
     const key = RANGE;
-    const maxAbs = Math.max(...D.heatmap.map(d => Math.abs(d[key])));
-    D.heatmap.forEach(d => {
+    const sorted = D.heatmap.slice().sort((a, b) => b[key] - a[key]);
+    const maxAbs = Math.max(...sorted.map(d => Math.abs(d[key])));
+    sorted.forEach((d, i) => {
       const v = d[key];
       const c = el('div', 'heat-cell');
       c.style.background = heatColor(v, maxAbs);
       c.dataset.name = d.name;
       c.innerHTML = `
-        <span class="heat-rank">#${d.rank}</span>
+        <span class="heat-rank">#${i + 1}</span>
         <div class="heat-name">${d.name}</div>
         <div class="heat-chg" data-fkey="hm-${d.name}">${fmtPct(v)}</div>
         <div class="heat-vol">热度 ${d.heat}</div>`;
@@ -459,6 +461,9 @@
     const d = new Date();
     return d.toISOString().slice(0, 10);
   }
+  function saveScanDate(date) {
+    try { localStorage.setItem(SCAN_DATE_KEY, date); } catch (e) {}
+  }
 
   function syncDateControl() {
     const input = $('#scanDate');
@@ -503,8 +508,8 @@
 
   // 按日期扫描：优先请求本地后端；离线/后端未启动时仍可载入 data.js 快照
   function refresh(force = false) {
-    const btn = force ? $('#btnRescan') : $('#btnRefresh');
-    if ($('#btnRefresh').classList.contains('loading') || $('#btnRescan').classList.contains('loading')) return;
+    const btn = $('#btnRescan');
+    if (btn.classList.contains('loading')) return;
     btn.classList.add('loading');
 
     const date = selectedDate();
@@ -517,6 +522,7 @@
         replaceData(fresh);
         renderAll();
         syncDateControl();
+        saveScanDate($('#scanDate').value);
         btn.classList.remove('loading');
         showToast('扫描完成 · ' + toastForData());
       })
@@ -550,7 +556,6 @@
       if (SORT.key === k) SORT.dir *= -1; else { SORT.key = k; SORT.dir = (k === 'name') ? 1 : -1; }
       renderSectorTable();
     }));
-    $('#btnRefresh').addEventListener('click', () => refresh(false));
     $('#btnRescan').addEventListener('click', () => refresh(true));
     $('#scanDate').addEventListener('change', () => refresh(false));
   }
@@ -561,6 +566,8 @@
     renderTrend(); renderStatus();
     syncDateControl();
     bindControls();
+    const saved = (() => { try { return localStorage.getItem(SCAN_DATE_KEY); } catch (e) { return null; } })();
+    if (saved) { $('#scanDate').value = saved; refresh(false); }
   }
   window.TERMINAL = { refresh, data: D };
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init); else init();

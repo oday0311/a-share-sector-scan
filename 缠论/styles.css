@@ -74,6 +74,8 @@ a { color: inherit; }
   background: var(--card); color: var(--ink); border-radius: 3px; font-size: 12px; font-weight: 700;
 }
 .mini-btn:hover, .tool-toggle:hover { border-color: #cfc7b6; background: #f8f4ea; }
+.mini-btn.primary { background: var(--ink); color: #fdf9f0; border-color: var(--ink); }
+.mini-btn.primary:hover { background: #363a44; }
 .mini-btn:disabled { opacity: .55; cursor: wait; }
 .tool-toggle:disabled { opacity: .48; cursor: not-allowed; background: #f6f1e6; }
 .tool-toggle.on { background: var(--ink); color: #fdf9f0; border-color: var(--ink); }
