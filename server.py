@@ -5188,6 +5188,349 @@ def list_review_history(limit: int = 14) -> list[dict]:
     return results
 
 
+# ═══════════════════════════════════════════════════════════════
+#  STOCK DECISION — 个股决策看板
+# ═══════════════════════════════════════════════════════════════
+
+STOCK_DECISION_CACHE_DIR = CACHE_DIR / "stock_decision"
+STOCK_DECISION_CACHE_VERSION = "2026-06-29-v1"
+STOCK_DECISION_TASKS: dict[str, dict] = {}
+_STOCK_DECISION_TASK_LOCK = threading.Lock()
+_STOCK_DECISION_TASK_SEQ = 0
+
+def _stock_decision_cache_path(symbol: str, date_str: str) -> Path:
+    return STOCK_DECISION_CACHE_DIR / f"{symbol}_{date_str.replace('-', '')}.json"
+
+def _read_stock_decision_cache(symbol: str, date_str: str) -> dict | None:
+    p = _stock_decision_cache_path(symbol, date_str)
+    if p.exists():
+        try:
+            data = json.loads(p.read_text("utf-8"))
+            if isinstance(data, dict) and data.get("meta", {}).get("cache_version") == STOCK_DECISION_CACHE_VERSION:
+                return data
+        except Exception:
+            pass
+    return None
+
+def _write_stock_decision_cache(symbol: str, date_str: str, data: dict) -> None:
+    STOCK_DECISION_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    p = _stock_decision_cache_path(symbol, date_str)
+    p.write_text(json.dumps(data, ensure_ascii=False, indent=2), "utf-8")
+
+def load_stock_decision_list() -> list[dict]:
+    txt_path = Path("/Users/huangzhifang/Desktop/Sequoia-X/tushare_select_stocks.txt")
+    if not txt_path.exists():
+        txt_path = BASE_DIR / "tushare_select_stocks.txt"
+    if not txt_path.exists():
+        return []
+    stocks = []
+    for line in txt_path.read_text("utf-8").strip().splitlines():
+        parts = [p.strip() for p in line.strip().split(",") if p.strip()]
+        if len(parts) >= 2:
+            code = parts[0].strip()
+            name = parts[1].strip()
+            stocks.append({"code": code, "name": name, "score": 0, "price": None, "change": None, "strategies": {}})
+    return stocks
+
+def _calc_ma(values: list, period: int) -> float | None:
+    if len(values) < period:
+        return None
+    return sum(values[-period:]) / period
+
+def _calc_rsi(closes: list, period: int = 14) -> float:
+    if len(closes) < period + 1:
+        return 50.0
+    gains = []
+    losses = []
+    for i in range(1, len(closes)):
+        diff = closes[i] - closes[i - 1]
+        gains.append(max(0, diff))
+        losses.append(max(0, -diff))
+    avg_gain = sum(gains[-period:]) / period
+    avg_loss = sum(losses[-period:]) / period
+    if avg_loss == 0:
+        return 100.0
+    rs = avg_gain / avg_loss
+    return 100 - (100 / (1 + rs))
+
+def _check_turtle_breakout(bars: list) -> bool:
+    if len(bars) < 21:
+        return False
+    highs = [b["high"] for b in bars[-21:-1]]
+    highest = max(highs)
+    return bars[-1]["close"] > highest
+
+def _check_ma_volume_cross(bars: list) -> bool:
+    if len(bars) < 20:
+        return False
+    closes = [b["close"] for b in bars]
+    vols = [b.get("vol", 0) for b in bars]
+    ma5 = _calc_ma(closes, 5)
+    ma10 = _calc_ma(closes, 10)
+    ma20 = _calc_ma(closes, 20)
+    if ma5 is None or ma20 is None:
+        return False
+    prev_closes = closes[:-1]
+    prev_ma5 = _calc_ma(prev_closes, 5)
+    prev_ma20 = _calc_ma(prev_closes, 20)
+    if prev_ma5 is None or prev_ma20 is None:
+        return False
+    cross_up = prev_ma5 <= prev_ma20 and ma5 > ma20
+    avg_vol = sum(vols[-20:]) / 20
+    vol_up = vols[-1] > avg_vol * 1.5
+    return cross_up and vol_up
+
+def _check_rps_breakout(bars: list) -> bool:
+    if len(bars) < 20:
+        return False
+    closes = [b["close"] for b in bars]
+    if closes[-1] != max(closes[-20:]):
+        return False
+    if len(closes) < 50:
+        return True
+    ma20 = _calc_ma(closes, 20)
+    return ma20 is not None and closes[-1] > ma20
+
+def _check_high_tight_flag(bars: list) -> bool:
+    if len(bars) < 30:
+        return False
+    closes = [b["close"] for b in bars]
+    min_price = min(closes[-30:-10])
+    max_price = max(closes[-30:-10])
+    if min_price == 0:
+        return False
+    flagpole_gain = (max_price - min_price) / min_price
+    if flagpole_gain < 0.9:
+        return False
+    current = closes[-1]
+    pullback = (max_price - current) / max_price
+    return pullback < 0.25
+
+def _compute_stock_strategies(bars: list) -> dict:
+    return {
+        "turtle": _check_turtle_breakout(bars),
+        "ma_volume": _check_ma_volume_cross(bars),
+        "rps_breakout": _check_rps_breakout(bars),
+        "high_tight_flag": _check_high_tight_flag(bars),
+    }
+
+def _compute_stock_score(strategies: dict) -> int:
+    score = 0
+    if strategies.get("turtle"):
+        score += 1
+    if strategies.get("ma_volume"):
+        score += 1
+    if strategies.get("rps_breakout"):
+        score += 1
+    if strategies.get("high_tight_flag"):
+        score += 1
+    return score
+
+def build_stock_decision_detail(code: str, requested: dt.date, cfg: dict) -> dict:
+    date_str = requested.isoformat()
+    cached = _read_stock_decision_cache(code, date_str)
+    if cached:
+        return cached
+
+    stock_item = chanlun_stock_item(code)
+    try:
+        bars, _, _ = fetch_chanlun_bars(stock_item, "day", requested, cfg)
+    except Exception as exc:
+        raise RuntimeError(f"Cannot fetch stock bars for {code}: {exc}") from exc
+
+    if len(bars) < 20:
+        return {
+            "code": code, "name": stock_item.get("name", code),
+            "score": 0, "strategies": {}, "klines": [], "signals": [],
+            "ma": [], "details": {}, "recommendation": {"text": "历史数据不足，无法分析", "metas": {}},
+            "meta": {"cache_version": STOCK_DECISION_CACHE_VERSION}
+        }
+
+    closes = [b["close"] for b in bars]
+    strategies = _compute_stock_strategies(bars)
+    score = _compute_stock_score(strategies)
+
+    ma5 = _calc_ma(closes, 5)
+    ma10 = _calc_ma(closes, 10)
+    ma20 = _calc_ma(closes, 20)
+
+    klines = []
+    for b in bars[-60:]:
+        klines.append({
+            "date": b["date"],
+            "open": b["open"],
+            "high": b["high"],
+            "low": b["low"],
+            "close": b["close"],
+            "vol": b.get("vol", 0)
+        })
+
+    signals = []
+    for i in range(1, len(bars)):
+        prev_closes = [b["close"] for b in bars[:i]]
+        prev_bars = bars[:i]
+        if _check_turtle_breakout(prev_bars):
+            signals.append({"date": bars[i]["date"], "type": "buy"})
+
+    recommendation_text = ""
+    if score >= 3:
+        recommendation_text = "多个策略同时发出买入信号，建议重点关注。海龟突破、均线放量、RPS突破和高而窄旗形均确认，短期看多。"
+    elif score >= 2:
+        recommendation_text = "两个以上策略发出信号，可适当关注。建议结合大盘走势和板块热点综合判断。"
+    elif score >= 1:
+        recommendation_text = "单一策略信号，建议观望为主。等待更多确认信号后再考虑介入。"
+    else:
+        recommendation_text = "当前无明确买入信号，建议保持观望。可关注其他有信号的标的。"
+
+    data = {
+        "code": code,
+        "name": stock_item.get("name", code),
+        "score": score,
+        "strategies": strategies,
+        "klines": klines,
+        "signals": signals,
+        "ma": [
+            {"label": "MA5", "value": ma5},
+            {"label": "MA10", "value": ma10},
+            {"label": "MA20", "value": ma20},
+        ],
+        "details": {
+            "RSI(14)": round(_calc_rsi(closes, 14), 2),
+            "20日涨幅": round((closes[-1] / closes[-20] - 1) * 100, 2) if len(closes) >= 20 else 0,
+        },
+        "recommendation": {
+            "text": recommendation_text,
+            "metas": {
+                "策略通过数": f"{score}/4",
+                "最新价": f"{closes[-1]:.2f}",
+                "MA5": f"{ma5:.2f}" if ma5 else "-",
+                "MA20": f"{ma20:.2f}" if ma20 else "-",
+            }
+        },
+        "meta": {"tradeDate": requested.isoformat(), "cache_version": STOCK_DECISION_CACHE_VERSION}
+    }
+
+    _write_stock_decision_cache(code, date_str, data)
+    return data
+
+def analyze_stock_decision_batch(requested: dt.date, cfg: dict, progress_callback=None) -> list[dict]:
+    stocks = load_stock_decision_list()
+    results = []
+    total = len(stocks)
+    for idx, stock in enumerate(stocks, start=1):
+        code = stock["code"]
+        try:
+            detail = build_stock_decision_detail(code, requested, cfg)
+            stock["score"] = detail.get("score", 0)
+            stock["strategies"] = detail.get("strategies", {})
+            stock["price"] = detail.get("klines", [{}])[-1].get("close") if detail.get("klines") else None
+            if detail.get("klines") and len(detail["klines"]) >= 2:
+                prev_close = detail["klines"][-2]["close"]
+                curr_close = detail["klines"][-1]["close"]
+                if prev_close > 0:
+                    stock["change"] = round((curr_close / prev_close - 1) * 100, 2)
+        except Exception as exc:
+            log(f"stock-decision: failed for {code}: {exc}")
+            stock["error"] = str(exc)
+        results.append(stock)
+        if progress_callback is not None:
+            progress_callback(idx, total, stock, results)
+    results.sort(key=lambda x: x.get("score", 0), reverse=True)
+    return results
+
+def _stock_decision_sorted_results(results: list[dict]) -> list[dict]:
+    return sorted(results, key=lambda x: (x.get("score", 0), x.get("change") or -9999), reverse=True)
+
+def _stock_decision_new_task_id() -> str:
+    global _STOCK_DECISION_TASK_SEQ
+    with _STOCK_DECISION_TASK_LOCK:
+        _STOCK_DECISION_TASK_SEQ += 1
+        return f"sd-{int(time.time() * 1000)}-{_STOCK_DECISION_TASK_SEQ}"
+
+def _stock_decision_task_payload(task: dict) -> dict:
+    done = int(task.get("done", 0))
+    total = int(task.get("total", 0))
+    percent = round((done / total) * 100, 1) if total else 0.0
+    return {
+        "task_id": task.get("task_id"),
+        "status": task.get("status", "pending"),
+        "done": done,
+        "total": total,
+        "percent": percent,
+        "current": task.get("current"),
+        "started_at": task.get("started_at"),
+        "finished_at": task.get("finished_at"),
+        "error": task.get("error"),
+        "results": _stock_decision_sorted_results(list(task.get("results", []))),
+    }
+
+def _run_stock_decision_task(task_id: str, requested: dt.date, cfg: dict) -> None:
+    with _STOCK_DECISION_TASK_LOCK:
+        task = STOCK_DECISION_TASKS.get(task_id)
+        if not task:
+            return
+        task["status"] = "running"
+
+    def on_progress(done: int, total: int, stock: dict, results: list[dict]) -> None:
+        with _STOCK_DECISION_TASK_LOCK:
+            task = STOCK_DECISION_TASKS.get(task_id)
+            if not task:
+                return
+            task["done"] = done
+            task["total"] = total
+            task["current"] = {"code": stock.get("code"), "name": stock.get("name")}
+            task["results"] = _stock_decision_sorted_results(list(results))
+
+    try:
+        results = analyze_stock_decision_batch(requested, cfg, progress_callback=on_progress)
+        with _STOCK_DECISION_TASK_LOCK:
+            task = STOCK_DECISION_TASKS.get(task_id)
+            if task is not None:
+                task["status"] = "completed"
+                task["done"] = len(results)
+                task["total"] = len(results)
+                task["results"] = results
+                task["current"] = None
+                task["finished_at"] = dt.datetime.now().isoformat()
+    except Exception as exc:
+        with _STOCK_DECISION_TASK_LOCK:
+            task = STOCK_DECISION_TASKS.get(task_id)
+            if task is not None:
+                task["status"] = "failed"
+                task["error"] = str(exc)
+                task["finished_at"] = dt.datetime.now().isoformat()
+
+def start_stock_decision_task(requested: dt.date, cfg: dict) -> dict:
+    task_id = _stock_decision_new_task_id()
+    stocks = load_stock_decision_list()
+    task = {
+        "task_id": task_id,
+        "status": "pending",
+        "done": 0,
+        "total": len(stocks),
+        "current": None,
+        "results": [],
+        "error": None,
+        "started_at": dt.datetime.now().isoformat(),
+        "finished_at": None,
+    }
+    with _STOCK_DECISION_TASK_LOCK:
+        STOCK_DECISION_TASKS[task_id] = task
+        stale_ids = [k for k, v in STOCK_DECISION_TASKS.items() if v.get("status") in {"completed", "failed"}]
+        for stale_id in stale_ids[:-6]:
+            STOCK_DECISION_TASKS.pop(stale_id, None)
+    t = threading.Thread(target=_run_stock_decision_task, args=(task_id, requested, cfg), daemon=True)
+    t.start()
+    return _stock_decision_task_payload(task)
+
+def get_stock_decision_task(task_id: str) -> dict | None:
+    with _STOCK_DECISION_TASK_LOCK:
+        task = STOCK_DECISION_TASKS.get(task_id)
+        if task is None:
+            return None
+        return _stock_decision_task_payload(task)
+
+
 class SectorScanHandler(SimpleHTTPRequestHandler):
     server_version = "SectorScan/1.0"
 
@@ -5225,6 +5568,18 @@ class SectorScanHandler(SimpleHTTPRequestHandler):
             return
         if parsed.path == "/api/review/history":
             self.handle_review_history(parsed)
+            return
+        if parsed.path == "/api/stock-decision/list":
+            self.handle_stock_decision_list(parsed)
+            return
+        if parsed.path == "/api/stock-decision/analyze":
+            self.handle_stock_decision_analyze(parsed)
+            return
+        if parsed.path == "/api/stock-decision/analyze/status":
+            self.handle_stock_decision_analyze_status(parsed)
+            return
+        if parsed.path == "/api/stock-decision/detail":
+            self.handle_stock_decision_detail(parsed)
             return
         if not self.prepare_static_path(parsed.path):
             return
@@ -5266,6 +5621,8 @@ class SectorScanHandler(SimpleHTTPRequestHandler):
             self.path = "/decision/index.html"
         elif raw_path in {"/review", "/review/"}:
             self.path = "/review/index.html"
+        elif raw_path in {"/stock-decision", "/stock-decision/"}:
+            self.path = "/stock-decision/index.html"
         if self.is_private_path(raw_path):
             self.send_error(404)
             return False
@@ -5448,6 +5805,49 @@ class SectorScanHandler(SimpleHTTPRequestHandler):
         try:
             history = list_review_history(limit)
             self.send_json({"history": history})
+        except Exception as exc:
+            self.send_json({"error": str(exc)}, code=500)
+
+    def handle_stock_decision_list(self, parsed: urllib.parse.ParseResult) -> None:
+        try:
+            stocks = load_stock_decision_list()
+            self.send_json({"stocks": stocks})
+        except Exception as exc:
+            self.send_json({"error": str(exc)}, code=500)
+
+    def handle_stock_decision_analyze(self, parsed: urllib.parse.ParseResult) -> None:
+        params = urllib.parse.parse_qs(parsed.query)
+        date_str = (params.get("date") or [None])[0]
+        requested = parse_request_date(date_str)
+        try:
+            task = start_stock_decision_task(requested, self.server.config)
+            self.send_json(task)
+        except Exception as exc:
+            self.send_json({"error": str(exc)}, code=500)
+
+    def handle_stock_decision_analyze_status(self, parsed: urllib.parse.ParseResult) -> None:
+        params = urllib.parse.parse_qs(parsed.query)
+        task_id = (params.get("task_id") or [""])[0].strip()
+        if not task_id:
+            self.send_json({"error": "Missing task_id"}, code=400)
+            return
+        task = get_stock_decision_task(task_id)
+        if task is None:
+            self.send_json({"error": "Task not found"}, code=404)
+            return
+        self.send_json(task)
+
+    def handle_stock_decision_detail(self, parsed: urllib.parse.ParseResult) -> None:
+        params = urllib.parse.parse_qs(parsed.query)
+        code = (params.get("code") or [None])[0]
+        date_str = (params.get("date") or [None])[0]
+        if not code:
+            self.send_json({"error": "Missing stock code"}, code=400)
+            return
+        requested = parse_request_date(date_str)
+        try:
+            detail = build_stock_decision_detail(code, requested, self.server.config)
+            self.send_json(detail)
         except Exception as exc:
             self.send_json({"error": str(exc)}, code=500)
 

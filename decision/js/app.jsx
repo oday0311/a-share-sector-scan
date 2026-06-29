@@ -811,6 +811,7 @@ function Header({ view, sectorName, stockName, date, onDateChange, onBackToRotat
         <a href="/sector">板块扫描</a>
         <a href="/chanlun">缠论分析</a>
         <a className="active" href="/decision">决策看板</a>
+        <a href="/stock-decision">个股决策</a>
         <a href="/review">大盘复盘</a>
         <a href="/help">帮助</a>
       </nav>

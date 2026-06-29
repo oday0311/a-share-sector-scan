@@ -247,6 +247,7 @@ function App() {
           <a href="/sector">板块扫描</a>
           <a className="active" href="/chanlun">缠论分析</a>
           <a href="/decision">决策看板</a>
+          <a href="/stock-decision">个股决策</a>
           <a href="/review">大盘复盘</a>
           <a href="/help">帮助</a>
         </nav>

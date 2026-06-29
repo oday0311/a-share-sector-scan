@@ -1,0 +1,27 @@
+#!/bin/bash
+
+PROJECT_DIR="/Users/huangzhifang/Desktop/a-share-sector-scan"
+START_SCRIPT="$PROJECT_DIR/A股板块终端.command"
+APP_URL="http://127.0.0.1:8765/"
+
+if [ ! -d "$PROJECT_DIR" ]; then
+    osascript -e 'display dialog "未找到项目目录：\n/Users/huangzhifang/Desktop/a-share-sector-scan\n\n请确认项目位置后再启动。" buttons {"确定"} default button "确定" with icon stop'
+    exit 1
+fi
+
+if [ ! -x "$START_SCRIPT" ]; then
+    osascript -e 'display dialog "未找到可执行启动脚本：\nA股板块终端.command\n\n请在项目目录中确认该文件存在并具有执行权限。" buttons {"确定"} default button "确定" with icon stop'
+    exit 1
+fi
+
+if lsof -nP -iTCP:8765 -sTCP:LISTEN >/dev/null 2>&1; then
+    open "$APP_URL"
+    exit 0
+fi
+
+osascript <<EOF
+tell application "Terminal"
+    activate
+    do script "cd '$PROJECT_DIR' && './A股板块终端.command'"
+end tell
+EOF
